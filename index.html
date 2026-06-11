@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Monteur Check-In · Rework Prototype</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#f1f5f9; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:6px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState } = React;
+
+/* ============================ MOCK DATA ============================ */
+/* DEMO DATA — frei erfunden (keine echten Kunden, Codes oder Zugangsdaten). */
+const HOUSES = [
+  { code:"FWS17", name:"FWS17 – Musterstraße 17, Beispielstadt", rooms:9, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C210 · Flur EG", lock:"FWS17 – Haustür", battery:24 },
+  { code:"WS20",  name:"WS20 – Werkstraße 20", rooms:5, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C210 · Eingang", lock:"WS20 – Haustür", battery:18 },
+  { code:"GS6",   name:"GS6 – Gartenweg 6", rooms:6, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C200 · Hof", lock:"GS6 – Haustür", battery:48 },
+  { code:"ANH51", name:"ANH51 – Anhöhe 51", rooms:4, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C210 · Tor", lock:"ANH51 – Tür", battery:88 },
+];
+
+const LOCKS = [
+  { name:"ANH51 – Tor", battery:88, state:"Unlocked", ago:"15h" },
+  { name:"ANH51 – Tür", battery:88, state:"Unlocked", ago:"15h" },
+  { name:"GW15 – Haustür", battery:88, state:"Unlocked", ago:"15h" },
+  { name:"FWS17 – Haustür", battery:24, state:"Unlocked", ago:"15h" },
+  { name:"GS6 – Haustür", battery:48, state:"Unlocked", ago:"15h" },
+  { name:"WS20 – Haustür", battery:18, state:"Unlocked", ago:"15h" },
+];
+
+const ROOMS = [
+  { id:"FWS17-3", label:"FWS17 - 3 | EG- Hof Vorne", house:"FWS17", cap:2, status:"occupied", wifi:"Gast-WLAN", door:"100120" },
+  { id:"FWS17-4", label:"FWS17 - 4 | EG Straße Vorne", house:"FWS17", cap:2, status:"occupied", wifi:"Gast-WLAN", door:"100120" },
+  { id:"FWS17-5", label:"FWS17 - 5 | 1.OG Nachbarblick", house:"FWS17", cap:1, status:"occupied", wifi:"Gast-WLAN", door:"100130" },
+  { id:"FWS17-6", label:"FWS17 - 6 | 1.OG Vorne-Mitte", house:"FWS17", cap:1, status:"cleaning", wifi:"Gast-WLAN", door:"100130" },
+  { id:"FWS17-7", label:"FWS17 - 7 | 1.OG Hofblick Vorne", house:"FWS17", cap:1, status:"occupied", wifi:"Gast-WLAN", door:"100130" },
+  { id:"FWS17-9", label:"FWS17 - 9 | DG", house:"FWS17", cap:3, status:"available", wifi:"Gast-WLAN", door:"100140" },
+  { id:"WS20-3",  label:"WS20 - 3 | 1.OG 3P - hinten", house:"WS20", cap:3, status:"occupied", wifi:"Gast-WLAN", door:"100200" },
+  { id:"WS20-6",  label:"WS20 - 6 | DG 2P - hinten", house:"WS20", cap:2, status:"occupied", wifi:"Gast-WLAN", door:"100200" },
+  { id:"GS6-2",   label:"GS6 - 2 | EG", house:"GS6", cap:2, status:"available", wifi:"Gast-WLAN", door:"100300" },
+  { id:"GS6-4",   label:"GS6 - 4 | OG", house:"GS6", cap:1, status:"maintenance", wifi:"Gast-WLAN", door:"100300" },
+];
+
+// status of stay derived from checkout date relative to "today" = 2026-06-11
+const RES = [
+  { code:"DEMO01", guest:"Nordbau GmbH", kind:"Firma", room:"WS20-3", inn:"24.05.2026", out:"21.06.2026", status:"checked_in", phone:"+49 151 0000001", channel:"WhatsApp", qonto:true,  stay:"active", daysLeft:10 },
+  { code:"DEMO02", guest:"Nordbau GmbH", kind:"Firma", room:"WS20-6", inn:"24.05.2026", out:"21.06.2026", status:"checked_in", phone:"+49 151 0000001", channel:"WhatsApp", qonto:true,  stay:"active", daysLeft:10 },
+  { code:"DEMO03", guest:"Südwerk Bau GmbH", kind:"Firma", room:"WS20-6", inn:"12.05.2026", out:"12.06.2026", status:"checked_in", phone:"+49 151 0000002", channel:"WhatsApp", qonto:false, stay:"leaving", daysLeft:1 },
+  { code:"DEMO04", guest:"Projekt Alpha", kind:"Firma", room:"WS20-3", inn:"23.04.2026", out:"23.05.2026", status:"checked_out", phone:"+49 151 0000003", channel:"SMS", qonto:true, stay:"left", daysLeft:-19 },
+  { code:"DEMO05", guest:"Projekt Beta", kind:"Firma", room:"FWS17-6", inn:"20.04.2026", out:"20.05.2026", status:"checked_in", phone:"+49 151 0000004", channel:"E-Mail", qonto:false, stay:"overdue", daysLeft:-22 },
+  { code:"DEMO06", guest:"Max Beispiel", kind:"Person", room:"FWS17-7", inn:"01.06.2026", out:"14.06.2026", status:"checked_in", phone:"+49 151 0000005", channel:"WhatsApp", qonto:false, stay:"leaving", daysLeft:3 },
+];
+
+const CHECKINS = [
+  { guest:"Tom Muster", room:"WS20-6", out:"21.06.2026", status:"Pending", id:true, cashback:"none", aiScore:null },
+  { guest:"Jan Beispiel", room:"WS20-6", out:"12.06.2026", status:"Pending", id:true, cashback:"none", aiScore:null },
+  { guest:"Ana Demo", room:"FWS17-3", out:"19.05.2026", status:"Overdue", id:true, cashback:"submitted", aiScore:91, aiFlags:[] },
+  { guest:"Paul Test", room:"FWS17-1", out:"19.05.2026", status:"Overdue", id:true, cashback:"flagged", aiScore:38, aiFlags:["Eskalierender Müll im Zimmer","Kühlschrank nicht geleert"] },
+  { guest:"Lukas Probe", room:"FWS17-9", out:"19.05.2026", status:"Overdue", id:true, cashback:"approved", aiScore:84, aiFlags:[] },
+];
+
+const EXTENSIONS = [
+  { guest:"Südwerk Bau GmbH", room:"WS20-6", currentOut:"12.06.2026", wantedOut:"26.06.2026", channel:"WhatsApp", asked:"vor 2 Tagen", status:"pending" },
+  { guest:"Max Beispiel", room:"FWS17-7", currentOut:"14.06.2026", wantedOut:"—", channel:"WhatsApp", asked:"heute gefragt", status:"awaiting_guest" },
+];
+
+const CLEANING = [
+  { type:"General", house:"FWS17", title:"Allgemeinflächen FWS17", due:"Di 16.06.2026", recurring:"alle 2 Wochen · Dienstag", assignee:"Reinigungsteam", status:"scheduled" },
+  { type:"General", house:"WS20", title:"Allgemeinflächen WS20", due:"Di 16.06.2026", recurring:"alle 2 Wochen · Dienstag", assignee:"Reinigungsteam", status:"scheduled" },
+  { type:"Move-out", house:"WS20", title:"Auszug WS20-6 · Südwerk Bau", due:"automatisch bei Auszug", recurring:"einmalig", assignee:"Reinigungsteam", status:"auto_armed" },
+  { type:"Move-out", house:"FWS17", title:"Auszug FWS17-6 · Projekt Beta", due:"13.06.2026", recurring:"einmalig", assignee:"Reinigungsteam", status:"in_progress" },
+];
+
+const REPORTS = [
+  { house:"FWS17", room:"FWS17-6", date:"10.06.2026", by:"Reinigungsteam", aiScore:72, flags:["Bad: Kalk"], ok:true },
+  { house:"FWS17", room:"FWS17-1", date:"19.05.2026", by:"Gast-Video", aiScore:38, flags:["Eskalierender Müll","Kühlschrank voll"], ok:false },
+  { house:"WS20", room:"WS20-3", date:"23.05.2026", by:"Reinigungsteam", aiScore:95, flags:[], ok:true },
+];
+
+// Revenue derived from Qonto invoices (matched by company/person name)
+const REVENUE = [
+  { name:"Nordbau GmbH", room:"WS20-3", nights:28, perNight:25, total:700, source:"Qonto INV-2026-118" },
+  { name:"Nordbau GmbH", room:"WS20-6", nights:28, perNight:22, total:616, source:"Qonto INV-2026-118" },
+  { name:"Südwerk Bau GmbH", room:"WS20-6", nights:31, perNight:22, total:682, source:"Qonto INV-2026-104" },
+  { name:"Projekt Alpha", room:"WS20-3", nights:30, perNight:25, total:750, source:"Qonto INV-2026-090" },
+  { name:"Projekt Beta", room:"FWS17-6", nights:30, perNight:20, total:600, source:"— (keine Rechnung gefunden)" },
+];
+
+/* ============================ HELPERS ============================ */
+const stayBadge = (s) => ({
+  active:  ["Läuft", "bg-emerald-100 text-emerald-700"],
+  leaving: ["Läuft aus", "bg-amber-100 text-amber-700"],
+  overdue: ["Überfällig", "bg-rose-100 text-rose-700"],
+  left:    ["Ausgezogen", "bg-slate-100 text-slate-500"],
+}[s] || ["—","bg-slate-100 text-slate-500"]);
+
+const statusPill = (s) => ({
+  occupied:   ["Belegt","bg-blue-100 text-blue-700"],
+  available:  ["Frei","bg-emerald-100 text-emerald-700"],
+  cleaning:   ["Reinigung","bg-amber-100 text-amber-700"],
+  maintenance:["Wartung","bg-slate-200 text-slate-600"],
+}[s] || ["—","bg-slate-100 text-slate-500"]);
+
+const Card = ({children, className=""}) => (
+  <div className={"bg-white rounded-2xl shadow-sm border border-slate-200 "+className}>{children}</div>
+);
+const Pill = ({text, cls}) => <span className={"px-2.5 py-0.5 rounded-full text-xs font-semibold "+cls}>{text}</span>;
+const Battery = ({v}) => {
+  const c = v<25 ? "text-rose-600" : v<50 ? "text-amber-600" : "text-emerald-600";
+  return <span className={"font-bold "+c}>{v}%</span>;
+};
+
+/* ============================ OVERVIEW (cockpit) ============================ */
+function Overview({go}) {
+  const todo = [
+    { icon:"⏳", label:"3 Aufenthalte laufen in ≤3 Tagen aus", action:"Verlängern anfragen", to:"res", tone:"amber" },
+    { icon:"⚠️", label:"1 Aufenthalt überfällig (Projekt Beta, FWS17-6)", action:"Auszug anstoßen", to:"res", tone:"rose" },
+    { icon:"🎥", label:"1 Auszugsvideo geflaggt (Eskalierender Müll)", action:"Cashback prüfen", to:"checkins", tone:"rose" },
+    { icon:"📩", label:"1 offene Verlängerungs-Anfrage (Südwerk Bau)", action:"Freigeben", to:"ext", tone:"blue" },
+    { icon:"🧹", label:"1 Auszugs-Reinigung läuft (FWS17-6)", action:"Reinigung öffnen", to:"clean", tone:"amber" },
+    { icon:"🔋", label:"2 Nuki-Akkus kritisch (WS20 18%, FWS17 24%)", action:"Akku tauschen", to:"clean", tone:"rose" },
+  ];
+  const toneCls = { amber:"border-amber-300 bg-amber-50", rose:"border-rose-300 bg-rose-50", blue:"border-blue-300 bg-blue-50" };
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-800">Cockpit</h1>
+        <p className="text-slate-500">Was heute deine Aufmerksamkeit braucht.</p>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[["Belegung","78%","der Betten"],["Aktive Gäste","6","Buchungen"],["Umsatz Juni","≈ 3.348 €","aus Qonto"],["Frei ab heute","3","Zimmer"]].map((k,i)=>(
+          <Card key={i} className="p-5"><div className="text-3xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]} · {k[2]}</div></Card>
+        ))}
+      </div>
+
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-3">🎯 To-do</h2>
+        <div className="space-y-2">
+          {todo.map((t,i)=>(
+            <div key={i} className={"flex items-center justify-between gap-3 border rounded-xl px-4 py-3 "+toneCls[t.tone]}>
+              <div className="flex items-center gap-3"><span className="text-xl">{t.icon}</span><span className="text-sm font-medium text-slate-700">{t.label}</span></div>
+              <button onClick={()=>go(t.to)} className="text-sm font-semibold text-blue-700 whitespace-nowrap hover:underline">{t.action} →</button>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card className="p-5">
+          <h2 className="font-semibold text-slate-800 mb-3">🔒 Smart-Lock-Status (Nuki)</h2>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {LOCKS.map((l,i)=>(
+              <div key={i} className={"rounded-xl px-3 py-2 border "+(l.battery<25?"border-rose-200 bg-rose-50":l.battery<50?"border-amber-200 bg-amber-50":"border-emerald-200 bg-emerald-50")}>
+                <div className="text-sm font-medium text-slate-700">{l.name}</div>
+                <div className="flex justify-between text-xs"><Battery v={l.battery}/><span className="text-slate-400">{l.ago} · {l.state}</span></div>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card className="p-5">
+          <h2 className="font-semibold text-slate-800 mb-3">📷 Kameras (Tapo)</h2>
+          <div className="grid grid-cols-2 gap-2">
+            {HOUSES.map((h,i)=>(
+              <div key={i} className="rounded-xl bg-slate-900 text-slate-300 aspect-video flex flex-col items-center justify-center text-xs">
+                <span className="text-2xl">🎦</span><span className="mt-1">{h.code}</span><span className="text-[10px] text-slate-500">{h.camera}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-400 mt-2">Live-Stream-Einbindung sobald Tapo-Zugang vorliegt.</p>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ RESERVATIONS ============================ */
+function Reservations() {
+  const [rows,setRows] = useState(RES);
+  const toggleQonto = (code) => setRows(rs=>rs.map(r=>r.code===code?{...r,qonto:!r.qonto}:r));
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div><h1 className="text-2xl font-bold text-slate-800">Reservierungen</h1><p className="text-slate-500">Aufenthalt, Kanal & Abrechnung im Blick.</p></div>
+        <button className="bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold text-sm">+ Neue Reservierung</button>
+      </div>
+      <Card className="overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+            <tr><th className="text-left p-3">Gast</th><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Zeitraum</th><th className="text-left p-3">Aufenthalt</th><th className="text-left p-3">Kanal</th><th className="text-center p-3">Qonto-Rechnung</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r,i)=>{const [bt,bc]=stayBadge(r.stay);return(
+              <tr key={i} className="border-t border-slate-100">
+                <td className="p-3"><div className="font-semibold text-slate-800">{r.guest}</div><div className="text-xs text-slate-400">{r.kind} · {r.code} · {r.phone}</div></td>
+                <td className="p-3 text-slate-600">{r.room}</td>
+                <td className="p-3 text-slate-600">{r.inn} – {r.out}</td>
+                <td className="p-3"><Pill text={bt+(r.daysLeft>0?` (${r.daysLeft}d)`:"")} cls={bc}/></td>
+                <td className="p-3"><span className="text-slate-600">{r.channel}</span></td>
+                <td className="p-3 text-center">
+                  <label className="inline-flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={r.qonto} onChange={()=>toggleQonto(r.code)} className="w-4 h-4 accent-blue-600"/>
+                    <span className={"text-xs "+(r.qonto?"text-emerald-600 font-semibold":"text-slate-400")}>{r.qonto?"Auto billing created":"offen"}</span>
+                  </label>
+                </td>
+              </tr>
+            );})}
+          </tbody>
+        </table>
+      </Card>
+      <p className="text-xs text-slate-400">Checkbox = manuell. Geplant: Button „Rechnung in Qonto erstellen" + Auto-Abgleich ausgestellter Rechnungen per Firmen-/Personenname.</p>
+    </div>
+  );
+}
+
+/* ============================ ROOMS ============================ */
+function Rooms() {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between"><h1 className="text-2xl font-bold text-slate-800">Zimmer</h1><button className="bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold text-sm">+ Zimmer</button></div>
+      <Card className="overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Haus</th><th className="text-left p-3">Kapazität</th><th className="text-left p-3">Türcode</th><th className="text-left p-3">WLAN</th><th className="text-left p-3">Status</th></tr></thead>
+          <tbody>
+            {ROOMS.map((r,i)=>{const[pt,pc]=statusPill(r.status);return(
+              <tr key={i} className="border-t border-slate-100">
+                <td className="p-3 font-semibold text-slate-800">{r.label}</td>
+                <td className="p-3 text-slate-600">{r.house}</td>
+                <td className="p-3 text-slate-600">{r.cap} 🛏</td>
+                <td className="p-3"><span className="font-mono text-amber-700">{r.door}</span></td>
+                <td className="p-3 text-slate-600">📶 {r.wifi}</td>
+                <td className="p-3"><Pill text={pt} cls={pc}/></td>
+              </tr>
+            );})}
+          </tbody>
+        </table>
+      </Card>
+      <p className="text-xs text-slate-400">Status synchronisiert automatisch mit Check-in/Check-out (manuelles Override möglich).</p>
+    </div>
+  );
+}
+
+/* ============================ CHECK-INS + CASHBACK ============================ */
+function CheckIns() {
+  const [rows,setRows]=useState(CHECKINS);
+  const decide=(g,ok)=>setRows(rs=>rs.map(r=>r.guest===g?{...r,cashback:ok?"approved":"rejected"}:r));
+  const cbBadge=(c)=>({none:["—","bg-slate-100 text-slate-400"],submitted:["zu prüfen","bg-blue-100 text-blue-700"],flagged:["geflaggt","bg-rose-100 text-rose-700"],approved:["freigegeben ✓","bg-emerald-100 text-emerald-700"],rejected:["abgelehnt","bg-slate-200 text-slate-500"]}[c]);
+  return (
+    <div className="space-y-4">
+      <div><h1 className="text-2xl font-bold text-slate-800">Check-ins & Cashback</h1><p className="text-slate-500">KI bewertet das Auszugsvideo – du gibst die 20 € frei.</p></div>
+      {rows.map((r,i)=>{const[ct,cc]=cbBadge(r.cashback);return(
+        <Card key={i} className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-semibold text-slate-800">{r.guest} <span className="text-xs text-slate-400 font-normal">· {r.room} · Auszug {r.out}</span></div>
+              <div className="flex items-center gap-2 mt-1 text-xs">
+                <Pill text={r.status} cls={r.status==="Overdue"?"bg-rose-100 text-rose-700":"bg-amber-100 text-amber-700"}/>
+                <span className="text-blue-600">🪪 Ausweis ansehen</span>
+                <Pill text={"Cashback: "+ct} cls={cc}/>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {r.aiScore!==null && <div className="text-right"><div className="text-xs text-slate-400">KI-Score</div><div className={"text-xl font-bold "+(r.aiScore>=80?"text-emerald-600":r.aiScore>=60?"text-amber-600":"text-rose-600")}>{r.aiScore}</div></div>}
+              {(r.cashback==="submitted"||r.cashback==="flagged") &&
+                <div className="flex gap-2">
+                  <button onClick={()=>decide(r.guest,true)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-sm font-semibold">20 € freigeben</button>
+                  <button onClick={()=>decide(r.guest,false)} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-sm font-semibold">Ablehnen</button>
+                </div>}
+            </div>
+          </div>
+          {r.aiFlags && r.aiFlags.length>0 && <div className="mt-2 text-sm text-rose-700 bg-rose-50 rounded-lg px-3 py-2">⚠️ KI-Beanstandungen: {r.aiFlags.join(" · ")}</div>}
+        </Card>
+      );})}
+    </div>
+  );
+}
+
+/* ============================ EXTENSIONS ============================ */
+function Extensions() {
+  const [rows,setRows]=useState(EXTENSIONS);
+  const act=(g,ok)=>setRows(rs=>rs.map(r=>r.guest===g?{...r,status:ok?"approved":"declined"}:r));
+  return (
+    <div className="space-y-4">
+      <div><h1 className="text-2xl font-bold text-slate-800">Verlängerungen</h1><p className="text-slate-500">Automatische „verlängern?"-Nachfrage 3 Tage vor Auszug. Freigabe = neuer Auszugstermin + Reinigung gestoppt.</p></div>
+      {rows.map((r,i)=>(
+        <Card key={i} className="p-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="font-semibold text-slate-800">{r.guest} <span className="text-xs text-slate-400 font-normal">· {r.room}</span></div>
+            <div className="text-sm text-slate-500">Aktuell bis {r.currentOut} → Wunsch: <b>{r.wantedOut}</b> · {r.channel} · {r.asked}</div>
+          </div>
+          {r.status==="pending" && <div className="flex gap-2"><button onClick={()=>act(r.guest,true)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-semibold">Freigeben</button><button onClick={()=>act(r.guest,false)} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-sm font-semibold">Ablehnen</button></div>}
+          {r.status==="awaiting_guest" && <Pill text="Gast antwortet noch" cls="bg-amber-100 text-amber-700"/>}
+          {r.status==="approved" && <Pill text="Freigegeben ✓ · Reinigung gestoppt" cls="bg-emerald-100 text-emerald-700"/>}
+          {r.status==="declined" && <Pill text="Abgelehnt · Auszugsreinigung angelegt" cls="bg-slate-200 text-slate-500"/>}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/* ============================ CLEANING TIMELINE ============================ */
+const TIMELINE = [
+  { house:"FWS17", past:["2026-05-20","2026-06-03"], next:"2026-06-16" },
+  { house:"WS20",  past:["2026-05-19","2026-06-02"], next:"2026-06-16" },
+  { house:"GS6",   past:["2026-05-14","2026-05-28"], next:"2026-06-11" },
+  { house:"ANH51", past:["2026-05-21","2026-06-04"], next:"2026-06-17" },
+];
+function CleaningTimeline(){
+  const start=new Date("2026-05-07"), end=new Date("2026-06-21"), today=new Date("2026-06-11");
+  const pct=(d)=>((new Date(d)-start)/(end-start))*100;
+  const daysAgo=(d)=>Math.round((today-new Date(d))/86400000);
+  const fmt=(d)=>new Date(d).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"});
+  return (
+    <div className="space-y-4">
+      {TIMELINE.map((t,i)=>{
+        const last=t.past[t.past.length-1], ago=daysAgo(last), stale=ago>14;
+        return (
+          <div key={i}>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="font-semibold text-slate-700">{t.house}</span>
+              <span className="text-slate-500">Letzte: <b className={stale?"text-rose-600":"text-slate-700"}>{fmt(last)}</b> (vor {ago} T.) · Nächste: {fmt(t.next)}</span>
+            </div>
+            <div className="relative h-6 bg-slate-100 rounded-full">
+              <div className="absolute top-0 bottom-0 w-0.5 bg-rose-500" style={{left:pct(today)+"%"}}></div>
+              {t.past.map((d,j)=>(
+                <div key={j} title={fmt(d)} className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white" style={{left:pct(d)+"%"}}></div>
+              ))}
+              <div title={"geplant "+fmt(t.next)} className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-blue-500 border-2 border-white" style={{left:pct(t.next)+"%"}}></div>
+            </div>
+          </div>
+        );
+      })}
+      <div className="flex gap-4 text-xs text-slate-400 pt-1">
+        <span><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 align-middle mr-1"></span>erledigt</span>
+        <span><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 align-middle mr-1"></span>geplant</span>
+        <span><span className="inline-block w-3 h-0.5 bg-rose-500 align-middle mr-1"></span>heute</span>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ CLEANING ============================ */
+function Cleaning() {
+  return (
+    <div className="space-y-6">
+      <div><h1 className="text-2xl font-bold text-slate-800">Reinigung & Häuser</h1><p className="text-slate-500">Wiederkehrende Generalreinigung + automatische Auszugsaufträge. Reports pro Haus, KI-bewertet.</p></div>
+
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-1">🗓 Reinigungs-Zeitleiste</h2>
+        <p className="text-xs text-slate-400 mb-4">Auf einen Blick: wann zuletzt gereinigt wurde und wann die nächste fällig ist.</p>
+        <CleaningTimeline/>
+      </Card>
+
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-3">🧹 Aufträge</h2>
+        <div className="space-y-2">
+          {CLEANING.map((c,i)=>(
+            <div key={i} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-xl px-4 py-3">
+              <div>
+                <div className="font-medium text-slate-800">{c.title}</div>
+                <div className="text-xs text-slate-400">{c.house} · {c.recurring} · {c.assignee} · fällig: {c.due}</div>
+              </div>
+              <Pill text={{scheduled:"geplant",auto_armed:"auto bei Auszug",in_progress:"läuft"}[c.status]} cls={{scheduled:"bg-blue-100 text-blue-700",auto_armed:"bg-amber-100 text-amber-700",in_progress:"bg-emerald-100 text-emerald-700"}[c.status]}/>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-3">📋 Reports (KI-bewertet, pro Haus archiviert)</h2>
+        <div className="space-y-2">
+          {REPORTS.map((r,i)=>(
+            <div key={i} className={"flex items-center justify-between gap-2 rounded-xl px-4 py-3 border "+(r.ok?"border-slate-200":"border-rose-200 bg-rose-50")}>
+              <div><div className="font-medium text-slate-800">{r.room} <span className="text-xs text-slate-400 font-normal">· {r.date} · {r.by}</span></div>
+                {r.flags.length>0 && <div className="text-xs text-rose-600 mt-0.5">⚠️ {r.flags.join(" · ")}</div>}</div>
+              <div className={"text-lg font-bold "+(r.aiScore>=80?"text-emerald-600":r.aiScore>=60?"text-amber-600":"text-rose-600")}>{r.aiScore}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-3">🏠 Häuser</h2>
+        <div className="grid sm:grid-cols-2 gap-3">
+          {HOUSES.map((h,i)=>(
+            <div key={i} className="border border-slate-200 rounded-xl px-4 py-3">
+              <div className="font-medium text-slate-800">{h.code}</div>
+              <div className="text-xs text-slate-400">{h.name}</div>
+              <div className="text-xs text-slate-500 mt-1">Generalreinigung: {h.cleaningEvery} · {h.cleaningDay} · 📷 {h.camera} · 🔋 <Battery v={h.battery}/></div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ OCCUPANCY & REVENUE ============================ */
+function Revenue() {
+  const [group,setGroup]=useState("company");
+  const total = REVENUE.reduce((a,r)=>a+r.total,0);
+  return (
+    <div className="space-y-6">
+      <div><h1 className="text-2xl font-bold text-slate-800">Auslastung & Umsatz</h1><p className="text-slate-500">Umsatz aus Qonto-Rechnungen (Abgleich per Name). Auslastung aus Buchungen.</p></div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[["Belegung Juni","78%"],["Geplant Juli","64%"],["Geplant August","41%"],["Umsatz (Qonto)","≈ "+total.toLocaleString("de-DE")+" €"]].map((k,i)=>(
+          <Card key={i} className="p-5"><div className="text-2xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]}</div></Card>
+        ))}
+      </div>
+
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-3">Geplante Auslastung (nächste Monate)</h2>
+        <div className="flex items-end gap-3 h-40">
+          {[["Jun",78],["Jul",64],["Aug",41],["Sep",30],["Okt",22]].map((m,i)=>(
+            <div key={i} className="flex-1 flex flex-col items-center justify-end">
+              <div className="w-full bg-blue-500 rounded-t-lg" style={{height:m[1]+"%"}}></div>
+              <div className="text-xs text-slate-500 mt-1">{m[0]}</div><div className="text-xs font-semibold text-slate-700">{m[1]}%</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-slate-800">Umsatz pro Nacht</h2>
+          <div className="flex gap-1 text-xs">
+            <button onClick={()=>setGroup("company")} className={"px-3 py-1 rounded-lg font-semibold "+(group==="company"?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>nach Firma</button>
+            <button onClick={()=>setGroup("room")} className={"px-3 py-1 rounded-lg font-semibold "+(group==="room"?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>nach Zimmer</button>
+          </div>
+        </div>
+        <table className="w-full text-sm">
+          <thead className="text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">{group==="company"?"Firma/Person":"Zimmer"}</th><th className="text-left p-2">{group==="company"?"Zimmer":"Firma/Person"}</th><th className="text-right p-2">Nächte</th><th className="text-right p-2">€/Nacht</th><th className="text-right p-2">Summe</th><th className="text-left p-2 pl-4">Quelle</th></tr></thead>
+          <tbody>
+            {REVENUE.map((r,i)=>(
+              <tr key={i} className="border-t border-slate-100">
+                <td className="p-2 font-medium text-slate-800">{group==="company"?r.name:r.room}</td>
+                <td className="p-2 text-slate-500">{group==="company"?r.room:r.name}</td>
+                <td className="p-2 text-right text-slate-600">{r.nights}</td>
+                <td className="p-2 text-right text-slate-600">{r.perNight} €</td>
+                <td className="p-2 text-right font-semibold text-slate-800">{r.total} €</td>
+                <td className={"p-2 pl-4 text-xs "+(r.source.startsWith("Qonto")?"text-slate-400":"text-rose-500")}>{r.source}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ GUEST PORTAL ============================ */
+function Guest() {
+  const [step,setStep]=useState("code");
+  const [code,setCode]=useState("");
+  const checklist=["Jedes Zimmer & Bett","Boden & Bad","Kühlschrank leer","Kein Müll","Fenster geschlossen"];
+  const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
+  const [phase,setPhase]=useState("idle"); // idle | evaluating | review | done
+  const [detected,setDetected]=useState({});
+  const evaluate=(isFollowup)=>{
+    setPhase("evaluating");
+    setTimeout(()=>{
+      const d={}; ELEMENTS.forEach(e=>d[e]=true);
+      if(!isFollowup){ d["Kühlschrank (leer)"]=false; setDetected(d); setPhase("review"); }
+      else { setDetected(d); setPhase("done"); }
+    }, 2500);
+  };
+  const missing=ELEMENTS.filter(e=>detected[e]===false);
+  if(step==="code") return (
+    <div className="min-h-[70vh] flex items-center justify-center">
+      <div className="w-full max-w-sm">
+        <div className="bg-slate-900 rounded-t-3xl p-6 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🏠</div>
+          <h2 className="text-white font-bold text-xl mt-3">Monteur Check-In</h2>
+          <p className="text-slate-400 text-sm">Einfacher Zugang zu deinem Zimmer</p>
+        </div>
+        <div className="bg-white rounded-b-3xl p-6 shadow-lg">
+          <label className="text-xs text-slate-500">Reservierungscode</label>
+          <input value={code} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="z.B. DEMO01" className="w-full border border-slate-300 rounded-xl px-4 py-3 text-center font-mono mt-1"/>
+          <button onClick={()=>setStep("home")} className="w-full bg-blue-600 text-white rounded-xl py-3 font-semibold mt-3">→ Weiter</button>
+          <p className="text-[11px] text-slate-400 text-center mt-2">Auch nach dem Einchecken jederzeit nutzbar – für Tür-/WLAN-Codes & Check-out.</p>
+        </div>
+      </div>
+    </div>
+  );
+  return (
+    <div className="max-w-md mx-auto space-y-4">
+      <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-2xl p-5">
+        <div className="text-sm opacity-90">💶 Cashback-Aktion</div>
+        <div className="text-xl font-bold mt-1">Lade beim Auszug ein Video hoch – bekomme 20 € zurück, wenn alles sauber ist.</div>
+        <div className="text-xs opacity-90 mt-3">Das muss im Video zu sehen sein:</div>
+        <div className="flex flex-wrap gap-1.5 mt-1">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
+      </div>
+
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800">Dein Zugang · WS20-3</h3>
+        <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Haustür-Code</div><div className="font-mono text-lg font-bold text-slate-800">100200</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Zimmer-Code</div><div className="font-mono text-lg font-bold text-slate-800">0000</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">Gast-WLAN</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">demo-passwort</div></div>
+        </div>
+        <div className="flex gap-2 mt-3">
+          <button className="flex-1 bg-slate-100 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">📋 Hausregeln</button>
+          <button className="flex-1 bg-slate-100 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">💬 WhatsApp-Gruppe</button>
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800">Aufenthalt verlängern?</h3>
+        <p className="text-sm text-slate-500 mt-1">Auszug aktuell: 21.06.2026</p>
+        <button className="w-full mt-2 border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">+ Verlängerung anfragen</button>
+      </Card>
+
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800">Check-out · Live-Videoprüfung</h3>
+        {phase==="idle" &&
+          <button onClick={()=>evaluate(false)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-3 font-semibold">🎥 Auszugsvideo hochladen (20 € zurück)</button>}
+        {phase==="evaluating" &&
+          <div className="mt-3 flex items-center gap-3 text-slate-600 text-sm"><span className="animate-spin inline-block w-5 h-5 border-2 border-slate-300 border-t-blue-600 rounded-full"></span>Auswertung läuft… einen Moment ⏳</div>}
+        {(phase==="review"||phase==="done") &&
+          <div className="mt-3 grid grid-cols-2 gap-1">
+            {ELEMENTS.map((e,i)=>(
+              <div key={i} className={"flex items-center gap-2 text-sm "+(detected[e]?"text-emerald-700":"text-rose-600 font-semibold")}>
+                <span>{detected[e]?"✓":"✗"}</span><span>{e}</span>
+              </div>
+            ))}
+          </div>}
+        {phase==="review" && missing.length>0 &&
+          <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
+            ⚠️ Fast geschafft! Bitte filme noch: <b>{missing.join(", ")}</b>.
+            <button onClick={()=>evaluate(true)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-2.5 font-semibold">🎥 {missing[0]}-Video nachreichen</button>
+          </div>}
+        {phase==="done" &&
+          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✅ Alle Elemente erkannt! Dein Video wird zur Freigabe vorgelegt – bei sauberem Zustand bekommst du 20 € zurück.</div>}
+      </Card>
+      <button onClick={()=>setStep("code")} className="text-xs text-slate-400 w-full text-center">← zurück</button>
+    </div>
+  );
+}
+
+/* ============================ SETTINGS ============================ */
+function Settings() {
+  const rules=["Strikte Ruhezeiten 22:00–06:00.","Rauchen nur in ausgewiesenen Außenbereichen.","Küche sofort nach Gebrauch reinigen.","Keine externen Gäste ohne Vorankündigung.","Beim Auszug Video an die zentrale E-Mail – ohne Video 100 € Reinigungsgebühr.","Müll entfernen & Kühlschrank leeren beim Auszug.","Respektvoller Umgang – kein Mobbing/Rassismus."];
+  return (
+    <div className="space-y-6">
+      <div><h1 className="text-2xl font-bold text-slate-800">Einstellungen</h1></div>
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-2">🔗 Schnellzugriff</h2>
+        <div className="flex flex-wrap gap-2">{["Cleaning","Admin Dashboard","Energieberater App","Qonto"].map((l,i)=><span key={i} className="bg-indigo-50 text-indigo-700 rounded-lg px-3 py-1.5 text-sm">🔗 {l}</span>)}</div>
+      </Card>
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-2">📋 Globale Hausregeln <span className="text-xs text-slate-400 font-normal">· Auto-Übersetzung DE/EN/CS/SK/RU</span></h2>
+        <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{rules.map((r,i)=><li key={i}>{r}</li>)}</ol>
+      </Card>
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-2">📨 Kommunikation</h2>
+        <p className="text-sm text-slate-500">Adaptiv: Antwort auf dem Kanal, über den der Gast kommt. Start mit E-Mail; WhatsApp & Sipgate-SMS schaltbar.</p>
+      </Card>
+    </div>
+  );
+}
+
+/* ============================ SHELL ============================ */
+const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["rev","Auslastung & Umsatz","💶"],["set","Einstellungen","⚙️"]];
+function App() {
+  const [view,setView]=useState("over");
+  const [guest,setGuest]=useState(false);
+  const go=(v)=>{const map={res:"res",checkins:"checkins",ext:"ext",clean:"clean"};setView(map[v]||v);};
+  const Body = guest ? <Guest/> : {
+    over:<Overview go={go}/>, res:<Reservations/>, rooms:<Rooms/>, checkins:<CheckIns/>, ext:<Extensions/>, clean:<Cleaning/>, rev:<Revenue/>, set:<Settings/>
+  }[view];
+  return (
+    <div className="min-h-screen">
+      <header className="bg-slate-900 text-white">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center">🛡</div>
+            <div><div className="font-bold leading-tight">Monteur Check-In</div><div className="text-xs text-slate-400">JJ Real Estate · Rework-Prototyp</div></div>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <button onClick={()=>setGuest(g=>!g)} className={"px-3 py-1.5 rounded-lg font-semibold "+(guest?"bg-emerald-600":"bg-white/10")}>{guest?"← Admin":"👤 Gäste-Ansicht"}</button>
+            <span className="text-slate-300 hidden sm:inline">vangompel@jjrealestate.de</span>
+          </div>
+        </div>
+        {!guest && <nav className="max-w-7xl mx-auto px-2 flex gap-1 overflow-x-auto">
+          {NAV.map(([k,l,ic])=>(
+            <button key={k} onClick={()=>setView(k)} className={"px-3 py-2.5 text-sm whitespace-nowrap border-b-2 "+(view===k?"border-blue-500 text-white font-semibold":"border-transparent text-slate-400 hover:text-white")}>{ic} {l}</button>
+          ))}
+        </nav>}
+      </header>
+      <main className="max-w-7xl mx-auto px-4 py-6">{Body}</main>
+      <footer className="text-center text-xs text-slate-400 py-6">Prototyp · Demo-Daten · {new Date().getFullYear()} Monteurshäuser Management GmbH</footer>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
