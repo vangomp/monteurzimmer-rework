@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Monteur Check-In · Rework Prototype</title>
+<title>Monteur Check-In · Rework</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#f1f5f9; }
@@ -17,590 +18,579 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState } = React;
+const { useState, useEffect, useCallback } = React;
 
-/* ============================ MOCK DATA ============================ */
-/* DEMO DATA — frei erfunden (keine echten Kunden, Codes oder Zugangsdaten). */
-const HOUSES = [
-  { code:"FWS17", name:"FWS17 – Musterstraße 17, Beispielstadt", rooms:9, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C210 · Flur EG", lock:"FWS17 – Haustür", battery:24 },
-  { code:"WS20",  name:"WS20 – Werkstraße 20", rooms:5, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C210 · Eingang", lock:"WS20 – Haustür", battery:18 },
-  { code:"GS6",   name:"GS6 – Gartenweg 6", rooms:6, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C200 · Hof", lock:"GS6 – Haustür", battery:48 },
-  { code:"ANH51", name:"ANH51 – Anhöhe 51", rooms:4, cleaningEvery:"2 Wochen", cleaningDay:"Dienstag", camera:"Tapo C210 · Tor", lock:"ANH51 – Tür", battery:88 },
-];
+const SUPABASE_URL = "https://nwsbkujlupugktzfrwdb.supabase.co";
+const SUPABASE_KEY = "sb_publishable_UsM1ZkBCRBr5Nuiq7akc2A_W_K8bn_h";
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const LOCKS = [
-  { name:"ANH51 – Tor", battery:88, state:"Unlocked", ago:"15h" },
-  { name:"ANH51 – Tür", battery:88, state:"Unlocked", ago:"15h" },
-  { name:"GW15 – Haustür", battery:88, state:"Unlocked", ago:"15h" },
-  { name:"FWS17 – Haustür", battery:24, state:"Unlocked", ago:"15h" },
-  { name:"GS6 – Haustür", battery:48, state:"Unlocked", ago:"15h" },
-  { name:"WS20 – Haustür", battery:18, state:"Unlocked", ago:"15h" },
-];
+/* ---------- helpers ---------- */
+const TODAY = new Date(new Date().toDateString());
+const fmt = (d) => d ? new Date(d).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit",year:"numeric"}) : "—";
+const fmtShort = (d) => d ? new Date(d).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"}) : "—";
+const daysFromToday = (d) => Math.round((new Date(new Date(d).toDateString()) - TODAY)/86400000);
+const genCode = () => "M"+Array.from({length:5},()=>"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random()*32)]).join("");
 
-const ROOMS = [
-  { id:"FWS17-3", label:"FWS17 - 3 | EG- Hof Vorne", house:"FWS17", cap:2, status:"occupied", wifi:"Gast-WLAN", door:"100120" },
-  { id:"FWS17-4", label:"FWS17 - 4 | EG Straße Vorne", house:"FWS17", cap:2, status:"occupied", wifi:"Gast-WLAN", door:"100120" },
-  { id:"FWS17-5", label:"FWS17 - 5 | 1.OG Nachbarblick", house:"FWS17", cap:1, status:"occupied", wifi:"Gast-WLAN", door:"100130" },
-  { id:"FWS17-6", label:"FWS17 - 6 | 1.OG Vorne-Mitte", house:"FWS17", cap:1, status:"cleaning", wifi:"Gast-WLAN", door:"100130" },
-  { id:"FWS17-7", label:"FWS17 - 7 | 1.OG Hofblick Vorne", house:"FWS17", cap:1, status:"occupied", wifi:"Gast-WLAN", door:"100130" },
-  { id:"FWS17-9", label:"FWS17 - 9 | DG", house:"FWS17", cap:3, status:"available", wifi:"Gast-WLAN", door:"100140" },
-  { id:"WS20-3",  label:"WS20 - 3 | 1.OG 3P - hinten", house:"WS20", cap:3, status:"occupied", wifi:"Gast-WLAN", door:"100200" },
-  { id:"WS20-6",  label:"WS20 - 6 | DG 2P - hinten", house:"WS20", cap:2, status:"occupied", wifi:"Gast-WLAN", door:"100200" },
-  { id:"GS6-2",   label:"GS6 - 2 | EG", house:"GS6", cap:2, status:"available", wifi:"Gast-WLAN", door:"100300" },
-  { id:"GS6-4",   label:"GS6 - 4 | OG", house:"GS6", cap:1, status:"maintenance", wifi:"Gast-WLAN", door:"100300" },
-];
-
-// status of stay derived from checkout date relative to "today" = 2026-06-11
-const RES = [
-  { code:"DEMO01", guest:"Nordbau GmbH", kind:"Firma", room:"WS20-3", inn:"24.05.2026", out:"21.06.2026", status:"checked_in", phone:"+49 151 0000001", channel:"WhatsApp", qonto:true,  stay:"active", daysLeft:10 },
-  { code:"DEMO02", guest:"Nordbau GmbH", kind:"Firma", room:"WS20-6", inn:"24.05.2026", out:"21.06.2026", status:"checked_in", phone:"+49 151 0000001", channel:"WhatsApp", qonto:true,  stay:"active", daysLeft:10 },
-  { code:"DEMO03", guest:"Südwerk Bau GmbH", kind:"Firma", room:"WS20-6", inn:"12.05.2026", out:"12.06.2026", status:"checked_in", phone:"+49 151 0000002", channel:"WhatsApp", qonto:false, stay:"leaving", daysLeft:1 },
-  { code:"DEMO04", guest:"Projekt Alpha", kind:"Firma", room:"WS20-3", inn:"23.04.2026", out:"23.05.2026", status:"checked_out", phone:"+49 151 0000003", channel:"SMS", qonto:true, stay:"left", daysLeft:-19 },
-  { code:"DEMO05", guest:"Projekt Beta", kind:"Firma", room:"FWS17-6", inn:"20.04.2026", out:"20.05.2026", status:"checked_in", phone:"+49 151 0000004", channel:"E-Mail", qonto:false, stay:"overdue", daysLeft:-22 },
-  { code:"DEMO06", guest:"Max Beispiel", kind:"Person", room:"FWS17-7", inn:"01.06.2026", out:"14.06.2026", status:"checked_in", phone:"+49 151 0000005", channel:"WhatsApp", qonto:false, stay:"leaving", daysLeft:3 },
-];
-
-const CHECKINS = [
-  { guest:"Tom Muster", room:"WS20-6", out:"21.06.2026", status:"Pending", id:true, cashback:"none", aiScore:null },
-  { guest:"Jan Beispiel", room:"WS20-6", out:"12.06.2026", status:"Pending", id:true, cashback:"none", aiScore:null },
-  { guest:"Ana Demo", room:"FWS17-3", out:"19.05.2026", status:"Overdue", id:true, cashback:"submitted", aiScore:91, aiFlags:[] },
-  { guest:"Paul Test", room:"FWS17-1", out:"19.05.2026", status:"Overdue", id:true, cashback:"flagged", aiScore:38, aiFlags:["Eskalierender Müll im Zimmer","Kühlschrank nicht geleert"] },
-  { guest:"Lukas Probe", room:"FWS17-9", out:"19.05.2026", status:"Overdue", id:true, cashback:"approved", aiScore:84, aiFlags:[] },
-];
-
-const EXTENSIONS = [
-  { guest:"Südwerk Bau GmbH", room:"WS20-6", currentOut:"12.06.2026", wantedOut:"26.06.2026", channel:"WhatsApp", asked:"vor 2 Tagen", status:"pending" },
-  { guest:"Max Beispiel", room:"FWS17-7", currentOut:"14.06.2026", wantedOut:"—", channel:"WhatsApp", asked:"heute gefragt", status:"awaiting_guest" },
-];
-
-const CLEANING = [
-  { type:"General", house:"FWS17", title:"Allgemeinflächen FWS17", due:"Di 16.06.2026", recurring:"alle 2 Wochen · Dienstag", assignee:"Reinigungsteam", status:"scheduled" },
-  { type:"General", house:"WS20", title:"Allgemeinflächen WS20", due:"Di 16.06.2026", recurring:"alle 2 Wochen · Dienstag", assignee:"Reinigungsteam", status:"scheduled" },
-  { type:"Move-out", house:"WS20", title:"Auszug WS20-6 · Südwerk Bau", due:"automatisch bei Auszug", recurring:"einmalig", assignee:"Reinigungsteam", status:"auto_armed" },
-  { type:"Move-out", house:"FWS17", title:"Auszug FWS17-6 · Projekt Beta", due:"13.06.2026", recurring:"einmalig", assignee:"Reinigungsteam", status:"in_progress" },
-];
-
-const REPORTS = [
-  { house:"FWS17", room:"FWS17-6", date:"10.06.2026", by:"Reinigungsteam", aiScore:72, flags:["Bad: Kalk"], ok:true },
-  { house:"FWS17", room:"FWS17-1", date:"19.05.2026", by:"Gast-Video", aiScore:38, flags:["Eskalierender Müll","Kühlschrank voll"], ok:false },
-  { house:"WS20", room:"WS20-3", date:"23.05.2026", by:"Reinigungsteam", aiScore:95, flags:[], ok:true },
-];
-
-// Revenue derived from Qonto invoices (matched by company/person name)
-const REVENUE = [
-  { name:"Nordbau GmbH", room:"WS20-3", nights:28, perNight:25, total:700, source:"Qonto INV-2026-118" },
-  { name:"Nordbau GmbH", room:"WS20-6", nights:28, perNight:22, total:616, source:"Qonto INV-2026-118" },
-  { name:"Südwerk Bau GmbH", room:"WS20-6", nights:31, perNight:22, total:682, source:"Qonto INV-2026-104" },
-  { name:"Projekt Alpha", room:"WS20-3", nights:30, perNight:25, total:750, source:"Qonto INV-2026-090" },
-  { name:"Projekt Beta", room:"FWS17-6", nights:30, perNight:20, total:600, source:"— (keine Rechnung gefunden)" },
-];
-
-/* ============================ HELPERS ============================ */
+const stayOf = (r) => {
+  if (r.archived_at) return "left";
+  const dl = daysFromToday(r.check_out_date);
+  if (dl < 0) return "overdue";
+  if (dl <= 3) return "leaving";
+  return "active";
+};
 const stayBadge = (s) => ({
-  active:  ["Läuft", "bg-emerald-100 text-emerald-700"],
-  leaving: ["Läuft aus", "bg-amber-100 text-amber-700"],
-  overdue: ["Überfällig", "bg-rose-100 text-rose-700"],
-  left:    ["Ausgezogen", "bg-slate-100 text-slate-500"],
-}[s] || ["—","bg-slate-100 text-slate-500"]);
-
+  active:["Läuft","bg-emerald-100 text-emerald-700"],
+  leaving:["Läuft aus","bg-amber-100 text-amber-700"],
+  overdue:["Überfällig","bg-rose-100 text-rose-700"],
+  left:["Archiviert","bg-slate-100 text-slate-500"],
+}[s]||["—","bg-slate-100 text-slate-500"]);
 const statusPill = (s) => ({
-  occupied:   ["Belegt","bg-blue-100 text-blue-700"],
-  available:  ["Frei","bg-emerald-100 text-emerald-700"],
-  cleaning:   ["Reinigung","bg-amber-100 text-amber-700"],
+  occupied:["Belegt","bg-blue-100 text-blue-700"],
+  available:["Frei","bg-emerald-100 text-emerald-700"],
   maintenance:["Wartung","bg-slate-200 text-slate-600"],
-}[s] || ["—","bg-slate-100 text-slate-500"]);
+}[s]||["—","bg-slate-100 text-slate-500"]);
 
-const Card = ({children, className=""}) => (
-  <div className={"bg-white rounded-2xl shadow-sm border border-slate-200 "+className}>{children}</div>
-);
+/* ---------- UI atoms ---------- */
+const Card = ({children, className=""}) => <div className={"bg-white rounded-2xl shadow-sm border border-slate-200 "+className}>{children}</div>;
 const Pill = ({text, cls}) => <span className={"px-2.5 py-0.5 rounded-full text-xs font-semibold "+cls}>{text}</span>;
-const Battery = ({v}) => {
-  const c = v<25 ? "text-rose-600" : v<50 ? "text-amber-600" : "text-emerald-600";
-  return <span className={"font-bold "+c}>{v}%</span>;
+const Battery = ({v}) => { const c=v<25?"text-rose-600":v<50?"text-amber-600":"text-emerald-600"; return <span className={"font-bold "+c}>{v}%</span>; };
+const Btn = ({children,onClick,kind="primary",size="md",type="button"}) => {
+  const k={primary:"bg-blue-600 text-white hover:bg-blue-700",ok:"bg-emerald-600 text-white hover:bg-emerald-700",
+    danger:"bg-rose-600 text-white hover:bg-rose-700",ghost:"bg-slate-100 text-slate-600 hover:bg-slate-200",
+    soft:"bg-slate-200 text-slate-700 hover:bg-slate-300"}[kind];
+  const s={sm:"px-2.5 py-1 text-xs",md:"px-3 py-1.5 text-sm",lg:"px-4 py-2 text-sm"}[size];
+  return <button type={type} onClick={onClick} className={"rounded-lg font-semibold "+k+" "+s}>{children}</button>;
+};
+function Modal({title,onClose,children}) {
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-800">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+const Field = ({label,children}) => <label className="block mb-3"><span className="text-xs text-slate-500">{label}</span>{children}</label>;
+const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mt-1";
+
+/* ---------- toast ---------- */
+let toastFn = ()=>{};
+function Toasts(){
+  const [msgs,setMsgs]=useState([]);
+  toastFn=(text,kind="ok")=>{const id=Math.random();setMsgs(m=>[...m,{id,text,kind}]);setTimeout(()=>setMsgs(m=>m.filter(x=>x.id!==id)),3500);};
+  return <div className="fixed bottom-4 right-4 z-[60] space-y-2">{msgs.map(m=>(
+    <div key={m.id} className={"px-4 py-2 rounded-xl text-sm font-medium shadow-lg text-white "+(m.kind==="err"?"bg-rose-600":"bg-slate-800")}>{m.text}</div>
+  ))}</div>;
+}
+const toast=(t,k)=>toastFn(t,k);
+const err=(e)=>{ console.error(e); toast((e&&e.message)||"Fehler","err"); };
+
+/* ============================ LOGIN ============================ */
+function Login({onGuest}) {
+  const [email,setEmail]=useState(""),[pw,setPw]=useState(""),[busy,setBusy]=useState(false);
+  const login=async()=>{ setBusy(true);
+    const {error}=await sb.auth.signInWithPassword({email,password:pw});
+    setBusy(false); if(error) err(error); };
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="bg-slate-900 rounded-t-3xl p-6 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🛡</div>
+          <h2 className="text-white font-bold text-xl mt-3">Monteur Check-In</h2>
+          <p className="text-slate-400 text-sm">Admin-Anmeldung</p>
+        </div>
+        <div className="bg-white rounded-b-3xl p-6 shadow-lg">
+          <Field label="E-Mail"><input className={inputCls} type="email" value={email} onChange={e=>setEmail(e.target.value)} /></Field>
+          <Field label="Passwort"><input className={inputCls} type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} /></Field>
+          <Btn onClick={login} size="lg">{busy?"…":"Anmelden"}</Btn>
+          <div className="text-center mt-4 pt-4 border-t border-slate-100">
+            <button onClick={onGuest} className="text-sm text-blue-700 font-semibold">Ich bin Gast → Check-in mit Code</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================ DATA HOOK ============================ */
+function useList(loader, deps=[]) {
+  const [data,setData]=useState(null);
+  const reload=useCallback(async()=>{ try{ setData(await loader()); }catch(e){ err(e); setData([]); } },[]);
+  useEffect(()=>{ reload(); },deps);
+  return [data,reload];
+}
+const loaders = {
+  rooms: async()=> (await sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number")).data||[],
+  roomsMin: async()=> (await sb.from("rooms").select("id,room_number").order("room_number")).data||[],
+  objekte: async()=> (await sb.from("cleaning_objekte").select("id,code,name,address").order("code")).data||[],
+  reservations: async()=> (await sb.from("reservations").select("*, rooms(room_number, cleaning_objekte(code))").order("check_in_date",{ascending:false})).data||[],
+  checkins: async()=> (await sb.from("check_ins").select("*, reservations(code, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50)).data||[],
+  extensions: async()=> (await sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false})).data||[],
+  nuki: async()=> (await sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name")).data||[],
+  orders: async()=> (await sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false})).data||[],
+  reports: async()=> (await sb.from("cleaning_reports").select("*, cleaning_objekte(code,name)").order("submitted_at",{ascending:false}).limit(40)).data||[],
+  settings: async()=> (await sb.from("settings").select("*")).data||[],
 };
 
-/* ============================ OVERVIEW (cockpit) ============================ */
-function Overview({go}) {
-  const todo = [
-    { icon:"⏳", label:"3 Aufenthalte laufen in ≤3 Tagen aus", action:"Verlängern anfragen", to:"res", tone:"amber" },
-    { icon:"⚠️", label:"1 Aufenthalt überfällig (Projekt Beta, FWS17-6)", action:"Auszug anstoßen", to:"res", tone:"rose" },
-    { icon:"🎥", label:"1 Auszugsvideo geflaggt (Eskalierender Müll)", action:"Cashback prüfen", to:"checkins", tone:"rose" },
-    { icon:"📩", label:"1 offene Verlängerungs-Anfrage (Südwerk Bau)", action:"Freigeben", to:"ext", tone:"blue" },
-    { icon:"🧹", label:"1 Auszugs-Reinigung läuft (FWS17-6)", action:"Reinigung öffnen", to:"clean", tone:"amber" },
-    { icon:"🔋", label:"2 Nuki-Akkus kritisch (WS20 18%, FWS17 24%)", action:"Akku tauschen", to:"clean", tone:"rose" },
-  ];
-  const toneCls = { amber:"border-amber-300 bg-amber-50", rose:"border-rose-300 bg-rose-50", blue:"border-blue-300 bg-blue-50" };
+/* ============================ COCKPIT ============================ */
+function Cockpit({go}) {
+  const [rooms]=useList(loaders.rooms);
+  const [res]=useList(loaders.reservations);
+  const [nuki]=useList(loaders.nuki);
+  const [ext]=useList(loaders.extensions);
+  if(!rooms||!res||!nuki||!ext) return <Loading/>;
+  const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_out_date)>=0);
+  const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_out_date)<0);
+  const leaving=active.filter(r=>daysFromToday(r.check_out_date)<=3);
+  const free=rooms.filter(r=>r.status==="available").length;
+  const lowBat=nuki.filter(n=>n.battery_charge<25);
+  const pendExt=ext.filter(e=>e.status==="pending");
+  const todo=[];
+  if(leaving.length) todo.push(["⏳",`${leaving.length} Aufenthalt(e) laufen in ≤3 Tagen aus`,"Reservierungen",()=>go("res"),"amber"]);
+  if(overdue.length) todo.push(["⚠️",`${overdue.length} Aufenthalt(e) überfällig`,"Anzeigen",()=>go("res"),"rose"]);
+  if(pendExt.length) todo.push(["📩",`${pendExt.length} offene Verlängerungs-Anfrage(n)`,"Freigeben",()=>go("ext"),"blue"]);
+  lowBat.forEach(n=>todo.push(["🔋",`Nuki-Akku niedrig: ${n.lock_name} (${n.battery_charge}%)`,"Reinigung",()=>go("clean"),"rose"]));
+  if(!todo.length) todo.push(["✅","Nichts Dringendes – alles im grünen Bereich.","",null,"emerald"]);
+  const toneCls={amber:"border-amber-300 bg-amber-50",rose:"border-rose-300 bg-rose-50",blue:"border-blue-300 bg-blue-50",emerald:"border-emerald-300 bg-emerald-50"};
+  const kpis=[["Belegung",rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100)+"%":"—","der Zimmer"],
+    ["Aktive Gäste",active.length,"Buchungen"],["Frei",free,"Zimmer"],["Überfällig",overdue.length,"Check-outs"]];
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Cockpit</h1>
-        <p className="text-slate-500">Was heute deine Aufmerksamkeit braucht.</p>
-      </div>
+      <div><h1 className="text-2xl font-bold text-slate-800">Cockpit</h1><p className="text-slate-500">Live aus Supabase.</p></div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[["Belegung","78%","der Betten"],["Aktive Gäste","6","Buchungen"],["Umsatz Juni","≈ 3.348 €","aus Qonto"],["Frei ab heute","3","Zimmer"]].map((k,i)=>(
-          <Card key={i} className="p-5"><div className="text-3xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]} · {k[2]}</div></Card>
-        ))}
+        {kpis.map((k,i)=><Card key={i} className="p-5"><div className="text-3xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]} · {k[2]}</div></Card>)}
       </div>
-
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">🎯 To-do</h2>
-        <div className="space-y-2">
-          {todo.map((t,i)=>(
-            <div key={i} className={"flex items-center justify-between gap-3 border rounded-xl px-4 py-3 "+toneCls[t.tone]}>
-              <div className="flex items-center gap-3"><span className="text-xl">{t.icon}</span><span className="text-sm font-medium text-slate-700">{t.label}</span></div>
-              <button onClick={()=>go(t.to)} className="text-sm font-semibold text-blue-700 whitespace-nowrap hover:underline">{t.action} →</button>
-            </div>
-          ))}
-        </div>
+        <div className="space-y-2">{todo.map((t,i)=>(
+          <div key={i} className={"flex items-center justify-between gap-3 border rounded-xl px-4 py-3 "+toneCls[t[4]]}>
+            <div className="flex items-center gap-3"><span className="text-xl">{t[0]}</span><span className="text-sm font-medium text-slate-700">{t[1]}</span></div>
+            {t[3]&&<button onClick={t[3]} className="text-sm font-semibold text-blue-700 whitespace-nowrap hover:underline">{t[2]} →</button>}
+          </div>))}</div>
       </Card>
-
-      <div className="grid lg:grid-cols-2 gap-6">
-        <Card className="p-5">
-          <h2 className="font-semibold text-slate-800 mb-3">🔒 Smart-Lock-Status (Nuki)</h2>
-          <div className="grid sm:grid-cols-2 gap-2">
-            {LOCKS.map((l,i)=>(
-              <div key={i} className={"rounded-xl px-3 py-2 border "+(l.battery<25?"border-rose-200 bg-rose-50":l.battery<50?"border-amber-200 bg-amber-50":"border-emerald-200 bg-emerald-50")}>
-                <div className="text-sm font-medium text-slate-700">{l.name}</div>
-                <div className="flex justify-between text-xs"><Battery v={l.battery}/><span className="text-slate-400">{l.ago} · {l.state}</span></div>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card className="p-5">
-          <h2 className="font-semibold text-slate-800 mb-3">📷 Kameras (Tapo)</h2>
-          <div className="grid grid-cols-2 gap-2">
-            {HOUSES.map((h,i)=>(
-              <div key={i} className="rounded-xl bg-slate-900 text-slate-300 aspect-video flex flex-col items-center justify-center text-xs">
-                <span className="text-2xl">🎦</span><span className="mt-1">{h.code}</span><span className="text-[10px] text-slate-500">{h.camera}</span>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-slate-400 mt-2">Live-Stream-Einbindung sobald Tapo-Zugang vorliegt.</p>
-        </Card>
-      </div>
+      <Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-3">🔒 Smart-Lock-Status (Nuki)</h2>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">{nuki.map((l,i)=>(
+          <div key={i} className={"rounded-xl px-3 py-2 border "+(l.battery_charge<25?"border-rose-200 bg-rose-50":l.battery_charge<50?"border-amber-200 bg-amber-50":"border-emerald-200 bg-emerald-50")}>
+            <div className="text-sm font-medium text-slate-700">{l.lock_name}</div>
+            <div className="flex justify-between text-xs"><Battery v={l.battery_charge}/><span className="text-slate-400">{l.battery_critical?"kritisch":""}</span></div>
+          </div>))}</div>
+      </Card>
     </div>
   );
 }
+const Loading=()=> <div className="py-20 text-center text-slate-400">Lädt…</div>;
 
-/* ============================ RESERVATIONS ============================ */
+/* ============================ RESERVATIONS (CRUD) ============================ */
 function Reservations() {
-  const [rows,setRows] = useState(RES);
-  const toggleQonto = (code) => setRows(rs=>rs.map(r=>r.code===code?{...r,qonto:!r.qonto}:r));
+  const [rows,reload]=useList(loaders.reservations);
+  const [roomOpts]=useList(loaders.roomsMin);
+  const [edit,setEdit]=useState(null); // object or 'new'
+  const [filter,setFilter]=useState("active");
+  if(!rows) return <Loading/>;
+  const shown=rows.filter(r=> filter==="all" ? true : filter==="archived" ? r.archived_at : !r.archived_at);
+  const save=async(form)=>{
+    try{
+      const payload={ guest_name:form.guest_name, guest_email:form.guest_email||null, room_id:form.room_id||null,
+        check_in_date:form.check_in_date, check_out_date:form.check_out_date, contact_channel:form.contact_channel||null,
+        preferred_language:form.preferred_language||"de" };
+      if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt"); }
+      else { const {error}=await sb.from("reservations").update(payload).eq("id",edit.id); if(error) throw error; toast("Gespeichert"); }
+      setEdit(null); reload();
+    }catch(e){ err(e); }
+  };
+  const del=async(r)=>{ if(!confirm(`Reservierung ${r.code} wirklich löschen?`))return;
+    const {error}=await sb.from("reservations").delete().eq("id",r.id); if(error)return err(error); toast("Gelöscht"); reload(); };
+  const archive=async(r)=>{ const {error}=await sb.from("reservations").update({archived_at:r.archived_at?null:new Date().toISOString()}).eq("id",r.id);
+    if(error)return err(error); toast(r.archived_at?"Wiederhergestellt":"Archiviert"); reload(); };
+  const toggleQonto=async(r)=>{ const {error}=await sb.from("reservations").update({qonto_billed:!r.qonto_billed}).eq("id",r.id);
+    if(error)return err(error); reload(); };
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold text-slate-800">Reservierungen</h1><p className="text-slate-500">Aufenthalt, Kanal & Abrechnung im Blick.</p></div>
-        <button className="bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold text-sm">+ Neue Reservierung</button>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div><h1 className="text-2xl font-bold text-slate-800">Reservierungen</h1><p className="text-slate-500">{rows.length} gesamt · live aus Supabase.</p></div>
+        <Btn onClick={()=>setEdit("new")} size="lg">+ Neue Reservierung</Btn>
       </div>
-      <Card className="overflow-hidden">
+      <div className="flex gap-1 text-xs">
+        {[["active","Aktiv"],["archived","Archiviert"],["all","Alle"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)} className={"px-3 py-1 rounded-lg font-semibold "+(filter===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>))}
+      </div>
+      <Card className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
-            <tr><th className="text-left p-3">Gast</th><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Zeitraum</th><th className="text-left p-3">Aufenthalt</th><th className="text-left p-3">Kanal</th><th className="text-center p-3">Qonto-Rechnung</th></tr>
-          </thead>
-          <tbody>
-            {rows.map((r,i)=>{const [bt,bc]=stayBadge(r.stay);return(
-              <tr key={i} className="border-t border-slate-100">
-                <td className="p-3"><div className="font-semibold text-slate-800">{r.guest}</div><div className="text-xs text-slate-400">{r.kind} · {r.code} · {r.phone}</div></td>
-                <td className="p-3 text-slate-600">{r.room}</td>
-                <td className="p-3 text-slate-600">{r.inn} – {r.out}</td>
-                <td className="p-3"><Pill text={bt+(r.daysLeft>0?` (${r.daysLeft}d)`:"")} cls={bc}/></td>
-                <td className="p-3"><span className="text-slate-600">{r.channel}</span></td>
-                <td className="p-3 text-center">
-                  <label className="inline-flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={r.qonto} onChange={()=>toggleQonto(r.code)} className="w-4 h-4 accent-blue-600"/>
-                    <span className={"text-xs "+(r.qonto?"text-emerald-600 font-semibold":"text-slate-400")}>{r.qonto?"Auto billing created":"offen"}</span>
-                  </label>
-                </td>
-              </tr>
-            );})}
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr>
+            <th className="text-left p-3">Gast</th><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Zeitraum</th>
+            <th className="text-left p-3">Aufenthalt</th><th className="text-left p-3">Kanal</th><th className="text-center p-3">Qonto</th><th className="text-right p-3">Aktionen</th>
+          </tr></thead>
+          <tbody>{shown.map(r=>{const[bt,bc]=stayBadge(stayOf(r));const room=r.rooms;return(
+            <tr key={r.id} className="border-t border-slate-100">
+              <td className="p-3"><div className="font-semibold text-slate-800">{r.guest_name||"—"}</div><div className="text-xs text-slate-400">{r.code} · {r.guest_email||"—"}</div></td>
+              <td className="p-3 text-slate-600">{room?`${room.room_number}`:"—"}</td>
+              <td className="p-3 text-slate-600 whitespace-nowrap">{fmtShort(r.check_in_date)} – {fmtShort(r.check_out_date)}</td>
+              <td className="p-3"><Pill text={bt} cls={bc}/></td>
+              <td className="p-3 text-slate-600">{r.contact_channel||"—"}</td>
+              <td className="p-3 text-center"><input type="checkbox" checked={!!r.qonto_billed} onChange={()=>toggleQonto(r)} className="w-4 h-4 accent-blue-600"/></td>
+              <td className="p-3 text-right whitespace-nowrap">
+                <button onClick={()=>setEdit(r)} title="Bearbeiten" className="text-blue-600 px-1.5">✏️</button>
+                <button onClick={()=>archive(r)} title="Archivieren" className="text-amber-600 px-1.5">{r.archived_at?"↩️":"📦"}</button>
+                <button onClick={()=>del(r)} title="Löschen" className="text-rose-600 px-1.5">🗑</button>
+              </td>
+            </tr>);})}
+            {!shown.length&&<tr><td colSpan="7" className="p-6 text-center text-slate-400">Keine Einträge.</td></tr>}
           </tbody>
         </table>
       </Card>
-      <p className="text-xs text-slate-400">Checkbox = manuell. Geplant: Button „Rechnung in Qonto erstellen" + Auto-Abgleich ausgestellter Rechnungen per Firmen-/Personenname.</p>
+      <p className="text-xs text-slate-400">Qonto-Checkbox = manuell „Rechnung erstellt". Geplant: Auto-Abgleich + „Rechnung in Qonto erstellen".</p>
+      {edit&&<ResForm rec={edit==="new"?null:edit} rooms={roomOpts||[]} onSave={save} onClose={()=>setEdit(null)}/>}
     </div>
   );
 }
+function ResForm({rec,rooms,onSave,onClose}) {
+  const [f,setF]=useState({ guest_name:rec?.guest_name||"", guest_email:rec?.guest_email||"", room_id:rec?.room_id||"",
+    check_in_date:rec?.check_in_date||"", check_out_date:rec?.check_out_date||"", contact_channel:rec?.contact_channel||"",
+    preferred_language:rec?.preferred_language||"de" });
+  const u=(k,v)=>setF(s=>({...s,[k]:v}));
+  return (
+    <Modal title={rec?`Reservierung ${rec.code}`:"Neue Reservierung"} onClose={onClose}>
+      <Field label="Gast / Firma"><input className={inputCls} value={f.guest_name} onChange={e=>u("guest_name",e.target.value)}/></Field>
+      <Field label="E-Mail"><input className={inputCls} value={f.guest_email} onChange={e=>u("guest_email",e.target.value)}/></Field>
+      <Field label="Zimmer"><select className={inputCls} value={f.room_id} onChange={e=>u("room_id",e.target.value)}>
+        <option value="">— Zimmer wählen —</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.room_number}</option>)}</select></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Check-in"><input type="date" className={inputCls} value={f.check_in_date} onChange={e=>u("check_in_date",e.target.value)}/></Field>
+        <Field label="Check-out"><input type="date" className={inputCls} value={f.check_out_date} onChange={e=>u("check_out_date",e.target.value)}/></Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Kanal"><select className={inputCls} value={f.contact_channel} onChange={e=>u("contact_channel",e.target.value)}>
+          <option value="">—</option><option>WhatsApp</option><option>SMS</option><option>E-Mail</option></select></Field>
+        <Field label="Sprache"><select className={inputCls} value={f.preferred_language} onChange={e=>u("preferred_language",e.target.value)}>
+          <option value="de">DE</option><option value="en">EN</option><option value="cs">CS</option><option value="sk">SK</option><option value="ru">RU</option></select></Field>
+      </div>
+      <div className="flex justify-end gap-2 mt-2">
+        <Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
+        <Btn kind="ok" onClick={()=>{ if(!f.guest_name||!f.check_in_date||!f.check_out_date) return toast("Name + Daten nötig","err"); onSave(f); }}>Speichern</Btn>
+      </div>
+    </Modal>
+  );
+}
 
-/* ============================ ROOMS ============================ */
+/* ============================ ROOMS (CRUD) ============================ */
 function Rooms() {
+  const [rows,reload]=useList(loaders.rooms);
+  const [objekte]=useList(loaders.objekte);
+  const [edit,setEdit]=useState(null);
+  if(!rows) return <Loading/>;
+  const setStatus=async(r,status)=>{ const {error}=await sb.from("rooms").update({status}).eq("id",r.id); if(error)return err(error); reload(); };
+  const save=async(f)=>{ try{
+    const p={room_number:f.room_number,objekt_id:f.objekt_id||null,capacity:Number(f.capacity)||1,status:f.status,
+      door_code:f.door_code||null,house_door_code:f.house_door_code||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null};
+    if(edit==="new"){ const {error}=await sb.from("rooms").insert(p); if(error)throw error; toast("Zimmer angelegt"); }
+    else { const {error}=await sb.from("rooms").update(p).eq("id",edit.id); if(error)throw error; toast("Gespeichert"); }
+    setEdit(null); reload(); }catch(e){err(e);} };
+  const del=async(r)=>{ if(!confirm(`Zimmer ${r.room_number} löschen?`))return;
+    const {error}=await sb.from("rooms").delete().eq("id",r.id); if(error)return err(error); toast("Gelöscht"); reload(); };
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><h1 className="text-2xl font-bold text-slate-800">Zimmer</h1><button className="bg-blue-600 text-white px-4 py-2 rounded-xl font-semibold text-sm">+ Zimmer</button></div>
-      <Card className="overflow-hidden">
+      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-800">Zimmer</h1><p className="text-slate-500">{rows.length} Zimmer · live.</p></div><Btn onClick={()=>setEdit("new")} size="lg">+ Zimmer</Btn></div>
+      <Card className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Haus</th><th className="text-left p-3">Kapazität</th><th className="text-left p-3">Türcode</th><th className="text-left p-3">WLAN</th><th className="text-left p-3">Status</th></tr></thead>
-          <tbody>
-            {ROOMS.map((r,i)=>{const[pt,pc]=statusPill(r.status);return(
-              <tr key={i} className="border-t border-slate-100">
-                <td className="p-3 font-semibold text-slate-800">{r.label}</td>
-                <td className="p-3 text-slate-600">{r.house}</td>
-                <td className="p-3 text-slate-600">{r.cap} 🛏</td>
-                <td className="p-3"><span className="font-mono text-amber-700">{r.door}</span></td>
-                <td className="p-3 text-slate-600">📶 {r.wifi}</td>
-                <td className="p-3"><Pill text={pt} cls={pc}/></td>
-              </tr>
-            );})}
-          </tbody>
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr>
+            <th className="text-left p-3">Zimmer</th><th className="text-left p-3">Haus</th><th className="text-left p-3">Kap.</th>
+            <th className="text-left p-3">Türcode</th><th className="text-left p-3">WLAN</th><th className="text-left p-3">Status</th><th className="text-right p-3">Aktionen</th>
+          </tr></thead>
+          <tbody>{rows.map(r=>(
+            <tr key={r.id} className="border-t border-slate-100">
+              <td className="p-3 font-semibold text-slate-800">{r.room_number}</td>
+              <td className="p-3 text-slate-600">{r.cleaning_objekte?.code||"—"}</td>
+              <td className="p-3 text-slate-600">{r.capacity}</td>
+              <td className="p-3 font-mono text-amber-700">{r.door_code||"—"}</td>
+              <td className="p-3 text-slate-600">{r.wifi_ssid||"—"}</td>
+              <td className="p-3"><select value={r.status} onChange={e=>setStatus(r,e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1 text-xs">
+                <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></td>
+              <td className="p-3 text-right whitespace-nowrap">
+                <button onClick={()=>setEdit(r)} className="text-blue-600 px-1.5">✏️</button>
+                <button onClick={()=>del(r)} className="text-rose-600 px-1.5">🗑</button>
+              </td>
+            </tr>))}</tbody>
         </table>
       </Card>
-      <p className="text-xs text-slate-400">Status synchronisiert automatisch mit Check-in/Check-out (manuelles Override möglich).</p>
+      {edit&&<RoomForm rec={edit==="new"?null:edit} objekte={objekte||[]} onSave={save} onClose={()=>setEdit(null)}/>}
     </div>
   );
 }
+function RoomForm({rec,objekte,onSave,onClose}) {
+  const [f,setF]=useState({ room_number:rec?.room_number||"", objekt_id:rec?.objekt_id||"", capacity:rec?.capacity||1, status:rec?.status||"available",
+    door_code:rec?.door_code||"", house_door_code:rec?.house_door_code||"", wifi_ssid:rec?.wifi_ssid||"", wifi_password:rec?.wifi_password||"" });
+  const u=(k,v)=>setF(s=>({...s,[k]:v}));
+  return (
+    <Modal title={rec?`Zimmer ${rec.room_number}`:"Neues Zimmer"} onClose={onClose}>
+      <Field label="Zimmer-Bezeichnung"><input className={inputCls} value={f.room_number} onChange={e=>u("room_number",e.target.value)}/></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Haus"><select className={inputCls} value={f.objekt_id} onChange={e=>u("objekt_id",e.target.value)}>
+          <option value="">—</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code}</option>)}</select></Field>
+        <Field label="Kapazität"><input type="number" className={inputCls} value={f.capacity} onChange={e=>u("capacity",e.target.value)}/></Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Zimmer-Türcode"><input className={inputCls} value={f.door_code} onChange={e=>u("door_code",e.target.value)}/></Field>
+        <Field label="Haustür-Code"><input className={inputCls} value={f.house_door_code} onChange={e=>u("house_door_code",e.target.value)}/></Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="WLAN"><input className={inputCls} value={f.wifi_ssid} onChange={e=>u("wifi_ssid",e.target.value)}/></Field>
+        <Field label="WLAN-Passwort"><input className={inputCls} value={f.wifi_password} onChange={e=>u("wifi_password",e.target.value)}/></Field>
+      </div>
+      <Field label="Status"><select className={inputCls} value={f.status} onChange={e=>u("status",e.target.value)}>
+        <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></Field>
+      <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn><Btn kind="ok" onClick={()=>{if(!f.room_number)return toast("Bezeichnung nötig","err");onSave(f);}}>Speichern</Btn></div>
+    </Modal>
+  );
+}
 
-/* ============================ CHECK-INS + CASHBACK ============================ */
+/* ============================ CHECK-INS ============================ */
 function CheckIns() {
-  const [rows,setRows]=useState(CHECKINS);
-  const decide=(g,ok)=>setRows(rs=>rs.map(r=>r.guest===g?{...r,cashback:ok?"approved":"rejected"}:r));
-  const cbBadge=(c)=>({none:["—","bg-slate-100 text-slate-400"],submitted:["zu prüfen","bg-blue-100 text-blue-700"],flagged:["geflaggt","bg-rose-100 text-rose-700"],approved:["freigegeben ✓","bg-emerald-100 text-emerald-700"],rejected:["abgelehnt","bg-slate-200 text-slate-500"]}[c]);
+  const [rows]=useList(loaders.checkins);
+  if(!rows) return <Loading/>;
   return (
     <div className="space-y-4">
-      <div><h1 className="text-2xl font-bold text-slate-800">Check-ins & Cashback</h1><p className="text-slate-500">KI bewertet das Auszugsvideo – du gibst die 20 € frei.</p></div>
-      {rows.map((r,i)=>{const[ct,cc]=cbBadge(r.cashback);return(
-        <Card key={i} className="p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="font-semibold text-slate-800">{r.guest} <span className="text-xs text-slate-400 font-normal">· {r.room} · Auszug {r.out}</span></div>
-              <div className="flex items-center gap-2 mt-1 text-xs">
-                <Pill text={r.status} cls={r.status==="Overdue"?"bg-rose-100 text-rose-700":"bg-amber-100 text-amber-700"}/>
-                <span className="text-blue-600">🪪 Ausweis ansehen</span>
-                <Pill text={"Cashback: "+ct} cls={cc}/>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              {r.aiScore!==null && <div className="text-right"><div className="text-xs text-slate-400">KI-Score</div><div className={"text-xl font-bold "+(r.aiScore>=80?"text-emerald-600":r.aiScore>=60?"text-amber-600":"text-rose-600")}>{r.aiScore}</div></div>}
-              {(r.cashback==="submitted"||r.cashback==="flagged") &&
-                <div className="flex gap-2">
-                  <button onClick={()=>decide(r.guest,true)} className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-sm font-semibold">20 € freigeben</button>
-                  <button onClick={()=>decide(r.guest,false)} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-sm font-semibold">Ablehnen</button>
-                </div>}
-            </div>
-          </div>
-          {r.aiFlags && r.aiFlags.length>0 && <div className="mt-2 text-sm text-rose-700 bg-rose-50 rounded-lg px-3 py-2">⚠️ KI-Beanstandungen: {r.aiFlags.join(" · ")}</div>}
-        </Card>
-      );})}
+      <div><h1 className="text-2xl font-bold text-slate-800">Check-ins</h1><p className="text-slate-500">{rows.length} (max 50) · live.</p></div>
+      <Card className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr>
+          <th className="text-left p-3">Gast</th><th className="text-left p-3">Kontakt</th><th className="text-left p-3">Zimmer</th>
+          <th className="text-left p-3">Eingecheckt</th><th className="text-left p-3">Ausweis</th><th className="text-left p-3">Check-out-Video</th></tr></thead>
+        <tbody>{rows.map(c=>(
+          <tr key={c.id} className="border-t border-slate-100">
+            <td className="p-3 font-semibold text-slate-800">{c.full_name}</td>
+            <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}</td>
+            <td className="p-3 text-slate-600">{c.reservations?.rooms?.room_number||"—"}</td>
+            <td className="p-3 text-slate-600">{fmt(c.checked_in_at)}</td>
+            <td className="p-3">{c.id_card_url?<span className="text-emerald-600 text-xs">✓ vorhanden</span>:<span className="text-slate-400 text-xs">—</span>}</td>
+            <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
+          </tr>))}
+          {!rows.length&&<tr><td colSpan="6" className="p-6 text-center text-slate-400">Keine Check-ins.</td></tr>}
+        </tbody></table></Card>
+      <p className="text-xs text-slate-400">Ausweis-Links & Cashback-Freigabe folgen, sobald der KI-Video-Flow angebunden ist.</p>
     </div>
   );
 }
 
 /* ============================ EXTENSIONS ============================ */
 function Extensions() {
-  const [rows,setRows]=useState(EXTENSIONS);
-  const act=(g,ok)=>setRows(rs=>rs.map(r=>r.guest===g?{...r,status:ok?"approved":"declined"}:r));
+  const [rows,reload]=useList(loaders.extensions);
+  if(!rows) return <Loading/>;
+  const decide=async(e,ok)=>{ try{
+    const {error}=await sb.from("extension_requests").update({status:ok?"approved":"rejected"}).eq("id",e.id); if(error)throw error;
+    if(ok){ const resv=e.check_ins?.reservations; if(resv?.code && e.requested_checkout_date){
+      await sb.from("reservations").update({check_out_date:e.requested_checkout_date}).eq("code",resv.code); } }
+    toast(ok?"Freigegeben – Auszug verschoben":"Abgelehnt"); reload();
+  }catch(er){err(er);} };
   return (
     <div className="space-y-4">
-      <div><h1 className="text-2xl font-bold text-slate-800">Verlängerungen</h1><p className="text-slate-500">Automatische „verlängern?"-Nachfrage 3 Tage vor Auszug. Freigabe = neuer Auszugstermin + Reinigung gestoppt.</p></div>
-      {rows.map((r,i)=>(
-        <Card key={i} className="p-4 flex flex-wrap items-center justify-between gap-3">
+      <div><h1 className="text-2xl font-bold text-slate-800">Verlängerungen</h1><p className="text-slate-500">Gast-Anfragen · Freigabe verschiebt den Auszugstermin.</p></div>
+      {!rows.length&&<Card className="p-8 text-center text-slate-400">Keine offenen Verlängerungs-Anfragen.</Card>}
+      {rows.map(e=>{const r=e.check_ins?.reservations;return(
+        <Card key={e.id} className="p-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="font-semibold text-slate-800">{r.guest} <span className="text-xs text-slate-400 font-normal">· {r.room}</span></div>
-            <div className="text-sm text-slate-500">Aktuell bis {r.currentOut} → Wunsch: <b>{r.wantedOut}</b> · {r.channel} · {r.asked}</div>
+            <div className="font-semibold text-slate-800">{e.check_ins?.full_name||r?.code||"Gast"} <span className="text-xs text-slate-400 font-normal">· {r?.rooms?.room_number||""}</span></div>
+            <div className="text-sm text-slate-500">Aktuell bis {fmt(r?.check_out_date)} → Wunsch: <b>{fmt(e.requested_checkout_date)}</b>{e.reason?` · ${e.reason}`:""}</div>
           </div>
-          {r.status==="pending" && <div className="flex gap-2"><button onClick={()=>act(r.guest,true)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-semibold">Freigeben</button><button onClick={()=>act(r.guest,false)} className="bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg text-sm font-semibold">Ablehnen</button></div>}
-          {r.status==="awaiting_guest" && <Pill text="Gast antwortet noch" cls="bg-amber-100 text-amber-700"/>}
-          {r.status==="approved" && <Pill text="Freigegeben ✓ · Reinigung gestoppt" cls="bg-emerald-100 text-emerald-700"/>}
-          {r.status==="declined" && <Pill text="Abgelehnt · Auszugsreinigung angelegt" cls="bg-slate-200 text-slate-500"/>}
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-/* ============================ CLEANING TIMELINE ============================ */
-const TIMELINE = [
-  { house:"FWS17", past:["2026-05-20","2026-06-03"], next:"2026-06-16" },
-  { house:"WS20",  past:["2026-05-19","2026-06-02"], next:"2026-06-16" },
-  { house:"GS6",   past:["2026-05-14","2026-05-28"], next:"2026-06-11" },
-  { house:"ANH51", past:["2026-05-21","2026-06-04"], next:"2026-06-17" },
-];
-function CleaningTimeline(){
-  const start=new Date("2026-05-07"), end=new Date("2026-06-21"), today=new Date("2026-06-11");
-  const pct=(d)=>((new Date(d)-start)/(end-start))*100;
-  const daysAgo=(d)=>Math.round((today-new Date(d))/86400000);
-  const fmt=(d)=>new Date(d).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"});
-  return (
-    <div className="space-y-4">
-      {TIMELINE.map((t,i)=>{
-        const last=t.past[t.past.length-1], ago=daysAgo(last), stale=ago>14;
-        return (
-          <div key={i}>
-            <div className="flex justify-between text-sm mb-1">
-              <span className="font-semibold text-slate-700">{t.house}</span>
-              <span className="text-slate-500">Letzte: <b className={stale?"text-rose-600":"text-slate-700"}>{fmt(last)}</b> (vor {ago} T.) · Nächste: {fmt(t.next)}</span>
-            </div>
-            <div className="relative h-6 bg-slate-100 rounded-full">
-              <div className="absolute top-0 bottom-0 w-0.5 bg-rose-500" style={{left:pct(today)+"%"}}></div>
-              {t.past.map((d,j)=>(
-                <div key={j} title={fmt(d)} className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white" style={{left:pct(d)+"%"}}></div>
-              ))}
-              <div title={"geplant "+fmt(t.next)} className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-blue-500 border-2 border-white" style={{left:pct(t.next)+"%"}}></div>
-            </div>
-          </div>
-        );
-      })}
-      <div className="flex gap-4 text-xs text-slate-400 pt-1">
-        <span><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 align-middle mr-1"></span>erledigt</span>
-        <span><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 align-middle mr-1"></span>geplant</span>
-        <span><span className="inline-block w-3 h-0.5 bg-rose-500 align-middle mr-1"></span>heute</span>
-      </div>
+          {e.status==="pending"
+            ? <div className="flex gap-2"><Btn kind="primary" onClick={()=>decide(e,true)}>Freigeben</Btn><Btn kind="soft" onClick={()=>decide(e,false)}>Ablehnen</Btn></div>
+            : <Pill text={e.status==="approved"?"Freigegeben ✓":"Abgelehnt"} cls={e.status==="approved"?"bg-emerald-100 text-emerald-700":"bg-slate-200 text-slate-500"}/>}
+        </Card>);})}
     </div>
   );
 }
 
 /* ============================ CLEANING ============================ */
 function Cleaning() {
+  const [orders,reloadO]=useList(loaders.orders);
+  const [reports]=useList(loaders.reports);
+  const [objekte]=useList(loaders.objekte);
+  const [nuki]=useList(loaders.nuki);
+  if(!orders||!reports||!objekte||!nuki) return <Loading/>;
+  const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
+    if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-slate-800">Reinigung & Häuser</h1><p className="text-slate-500">Wiederkehrende Generalreinigung + automatische Auszugsaufträge. Reports pro Haus, KI-bewertet.</p></div>
-
+      <div><h1 className="text-2xl font-bold text-slate-800">Reinigung & Häuser</h1><p className="text-slate-500">Live aus Supabase.</p></div>
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-1">🗓 Reinigungs-Zeitleiste</h2>
-        <p className="text-xs text-slate-400 mb-4">Auf einen Blick: wann zuletzt gereinigt wurde und wann die nächste fällig ist.</p>
-        <CleaningTimeline/>
+        <h2 className="font-semibold text-slate-800 mb-3">🧹 Offene Aufträge ({orders.length})</h2>
+        <div className="space-y-2">{orders.map(o=>(
+          <div key={o.id} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-xl px-4 py-3">
+            <div><div className="font-medium text-slate-800">{o.cleaning_objekte?.code||"—"} · {Array.isArray(o.items_to_clean)?o.items_to_clean.length:0} Position(en)</div>
+              <div className="text-xs text-slate-400">zu reinigen bis: {fmt(o.zu_reinigen_bis)}{o.kommentar?` · ${o.kommentar}`:""}</div></div>
+            <Btn kind="soft" size="sm" onClick={()=>archiveOrder(o)}>Archivieren</Btn>
+          </div>))}
+          {!orders.length&&<div className="text-sm text-slate-400">Keine offenen Aufträge.</div>}</div>
       </Card>
-
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">🧹 Aufträge</h2>
-        <div className="space-y-2">
-          {CLEANING.map((c,i)=>(
-            <div key={i} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-xl px-4 py-3">
-              <div>
-                <div className="font-medium text-slate-800">{c.title}</div>
-                <div className="text-xs text-slate-400">{c.house} · {c.recurring} · {c.assignee} · fällig: {c.due}</div>
-              </div>
-              <Pill text={{scheduled:"geplant",auto_armed:"auto bei Auszug",in_progress:"läuft"}[c.status]} cls={{scheduled:"bg-blue-100 text-blue-700",auto_armed:"bg-amber-100 text-amber-700",in_progress:"bg-emerald-100 text-emerald-700"}[c.status]}/>
-            </div>
-          ))}
-        </div>
+        <h2 className="font-semibold text-slate-800 mb-3">📋 Reports ({reports.length}, neueste)</h2>
+        <div className="space-y-2 max-h-80 overflow-auto">{reports.map(r=>(
+          <div key={r.id} className={"flex items-center justify-between gap-2 rounded-xl px-4 py-2 border "+(r.damage_noticed?"border-rose-200 bg-rose-50":"border-slate-200")}>
+            <div><div className="font-medium text-slate-800 text-sm">{r.cleaning_objekte?.code||"—"} <span className="text-xs text-slate-400 font-normal">· {fmt(r.submitted_at)} · {r.cleaner_name||"—"}</span></div>
+              {r.damage_noticed&&<div className="text-xs text-rose-600">⚠️ Schaden: {r.damage_description||"gemeldet"}</div>}</div>
+            <Pill text={r.status} cls="bg-slate-100 text-slate-500"/>
+          </div>))}</div>
       </Card>
-
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">📋 Reports (KI-bewertet, pro Haus archiviert)</h2>
-        <div className="space-y-2">
-          {REPORTS.map((r,i)=>(
-            <div key={i} className={"flex items-center justify-between gap-2 rounded-xl px-4 py-3 border "+(r.ok?"border-slate-200":"border-rose-200 bg-rose-50")}>
-              <div><div className="font-medium text-slate-800">{r.room} <span className="text-xs text-slate-400 font-normal">· {r.date} · {r.by}</span></div>
-                {r.flags.length>0 && <div className="text-xs text-rose-600 mt-0.5">⚠️ {r.flags.join(" · ")}</div>}</div>
-              <div className={"text-lg font-bold "+(r.aiScore>=80?"text-emerald-600":r.aiScore>=60?"text-amber-600":"text-rose-600")}>{r.aiScore}</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">🏠 Häuser</h2>
-        <div className="grid sm:grid-cols-2 gap-3">
-          {HOUSES.map((h,i)=>(
-            <div key={i} className="border border-slate-200 rounded-xl px-4 py-3">
-              <div className="font-medium text-slate-800">{h.code}</div>
-              <div className="text-xs text-slate-400">{h.name}</div>
-              <div className="text-xs text-slate-500 mt-1">Generalreinigung: {h.cleaningEvery} · {h.cleaningDay} · 📷 {h.camera} · 🔋 <Battery v={h.battery}/></div>
-            </div>
-          ))}
-        </div>
+        <h2 className="font-semibold text-slate-800 mb-3">🏠 Häuser & Akkus</h2>
+        <div className="grid sm:grid-cols-2 gap-3">{objekte.map(o=>{const lock=nuki.find(n=>(n.lock_name||"").toLowerCase().includes((o.code||"").toLowerCase()));return(
+          <div key={o.id} className="border border-slate-200 rounded-xl px-4 py-3">
+            <div className="font-medium text-slate-800">{o.code}</div><div className="text-xs text-slate-400">{o.name}{o.address?` · ${o.address}`:""}</div>
+            {lock&&<div className="text-xs text-slate-500 mt-1">🔋 <Battery v={lock.battery_charge}/> · {lock.lock_name}</div>}
+          </div>);})}</div>
       </Card>
     </div>
   );
 }
 
-/* ============================ OCCUPANCY & REVENUE ============================ */
-function Revenue() {
-  const [group,setGroup]=useState("company");
-  const total = REVENUE.reduce((a,r)=>a+r.total,0);
+/* ============================ OCCUPANCY ============================ */
+function Occupancy() {
+  const [rooms]=useList(loaders.rooms);
+  const [res]=useList(loaders.reservations);
+  if(!rooms||!res) return <Loading/>;
+  const occ=rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
+  const byObjekt={};
+  rooms.forEach(r=>{const c=r.cleaning_objekte?.code||"—";byObjekt[c]=byObjekt[c]||{total:0,occ:0};byObjekt[c].total++;if(r.status==="occupied")byObjekt[c].occ++;});
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-slate-800">Auslastung & Umsatz</h1><p className="text-slate-500">Umsatz aus Qonto-Rechnungen (Abgleich per Name). Auslastung aus Buchungen.</p></div>
-
+      <div><h1 className="text-2xl font-bold text-slate-800">Auslastung & Umsatz</h1><p className="text-slate-500">Auslastung live aus Zimmerstatus. Umsatz folgt mit Qonto-Anbindung.</p></div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[["Belegung Juni","78%"],["Geplant Juli","64%"],["Geplant August","41%"],["Umsatz (Qonto)","≈ "+total.toLocaleString("de-DE")+" €"]].map((k,i)=>(
-          <Card key={i} className="p-5"><div className="text-2xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]}</div></Card>
-        ))}
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung gesamt</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{rooms.filter(r=>r.status==="occupied").length}</div><div className="text-sm text-slate-500">belegte Zimmer</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{rooms.filter(r=>r.status==="available").length}</div><div className="text-sm text-slate-500">freie Zimmer</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-400">€ —</div><div className="text-sm text-slate-500">Umsatz (Qonto folgt)</div></Card>
       </div>
-
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">Geplante Auslastung (nächste Monate)</h2>
-        <div className="flex items-end gap-3 h-40">
-          {[["Jun",78],["Jul",64],["Aug",41],["Sep",30],["Okt",22]].map((m,i)=>(
-            <div key={i} className="flex-1 flex flex-col items-center justify-end">
-              <div className="w-full bg-blue-500 rounded-t-lg" style={{height:m[1]+"%"}}></div>
-              <div className="text-xs text-slate-500 mt-1">{m[0]}</div><div className="text-xs font-semibold text-slate-700">{m[1]}%</div>
-            </div>
-          ))}
-        </div>
+        <h2 className="font-semibold text-slate-800 mb-3">Belegung pro Haus</h2>
+        <div className="space-y-3">{Object.entries(byObjekt).map(([code,v])=>{const p=Math.round(v.occ/v.total*100);return(
+          <div key={code}><div className="flex justify-between text-sm mb-1"><span className="font-semibold text-slate-700">{code}</span><span className="text-slate-500">{v.occ}/{v.total} · {p}%</span></div>
+            <div className="h-3 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{width:p+"%"}}></div></div></div>);})}</div>
       </Card>
-
-      <Card className="p-5">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold text-slate-800">Umsatz pro Nacht</h2>
-          <div className="flex gap-1 text-xs">
-            <button onClick={()=>setGroup("company")} className={"px-3 py-1 rounded-lg font-semibold "+(group==="company"?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>nach Firma</button>
-            <button onClick={()=>setGroup("room")} className={"px-3 py-1 rounded-lg font-semibold "+(group==="room"?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>nach Zimmer</button>
-          </div>
-        </div>
-        <table className="w-full text-sm">
-          <thead className="text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">{group==="company"?"Firma/Person":"Zimmer"}</th><th className="text-left p-2">{group==="company"?"Zimmer":"Firma/Person"}</th><th className="text-right p-2">Nächte</th><th className="text-right p-2">€/Nacht</th><th className="text-right p-2">Summe</th><th className="text-left p-2 pl-4">Quelle</th></tr></thead>
-          <tbody>
-            {REVENUE.map((r,i)=>(
-              <tr key={i} className="border-t border-slate-100">
-                <td className="p-2 font-medium text-slate-800">{group==="company"?r.name:r.room}</td>
-                <td className="p-2 text-slate-500">{group==="company"?r.room:r.name}</td>
-                <td className="p-2 text-right text-slate-600">{r.nights}</td>
-                <td className="p-2 text-right text-slate-600">{r.perNight} €</td>
-                <td className="p-2 text-right font-semibold text-slate-800">{r.total} €</td>
-                <td className={"p-2 pl-4 text-xs "+(r.source.startsWith("Qonto")?"text-slate-400":"text-rose-500")}>{r.source}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-    </div>
-  );
-}
-
-/* ============================ GUEST PORTAL ============================ */
-function Guest() {
-  const [step,setStep]=useState("code");
-  const [code,setCode]=useState("");
-  const checklist=["Jedes Zimmer & Bett","Boden & Bad","Kühlschrank leer","Kein Müll","Fenster geschlossen"];
-  const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
-  const [phase,setPhase]=useState("idle"); // idle | evaluating | review | done
-  const [detected,setDetected]=useState({});
-  const evaluate=(isFollowup)=>{
-    setPhase("evaluating");
-    setTimeout(()=>{
-      const d={}; ELEMENTS.forEach(e=>d[e]=true);
-      if(!isFollowup){ d["Kühlschrank (leer)"]=false; setDetected(d); setPhase("review"); }
-      else { setDetected(d); setPhase("done"); }
-    }, 2500);
-  };
-  const missing=ELEMENTS.filter(e=>detected[e]===false);
-  if(step==="code") return (
-    <div className="min-h-[70vh] flex items-center justify-center">
-      <div className="w-full max-w-sm">
-        <div className="bg-slate-900 rounded-t-3xl p-6 text-center">
-          <div className="w-14 h-14 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🏠</div>
-          <h2 className="text-white font-bold text-xl mt-3">Monteur Check-In</h2>
-          <p className="text-slate-400 text-sm">Einfacher Zugang zu deinem Zimmer</p>
-        </div>
-        <div className="bg-white rounded-b-3xl p-6 shadow-lg">
-          <label className="text-xs text-slate-500">Reservierungscode</label>
-          <input value={code} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="z.B. DEMO01" className="w-full border border-slate-300 rounded-xl px-4 py-3 text-center font-mono mt-1"/>
-          <button onClick={()=>setStep("home")} className="w-full bg-blue-600 text-white rounded-xl py-3 font-semibold mt-3">→ Weiter</button>
-          <p className="text-[11px] text-slate-400 text-center mt-2">Auch nach dem Einchecken jederzeit nutzbar – für Tür-/WLAN-Codes & Check-out.</p>
-        </div>
-      </div>
-    </div>
-  );
-  return (
-    <div className="max-w-md mx-auto space-y-4">
-      <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-2xl p-5">
-        <div className="text-sm opacity-90">💶 Cashback-Aktion</div>
-        <div className="text-xl font-bold mt-1">Lade beim Auszug ein Video hoch – bekomme 20 € zurück, wenn alles sauber ist.</div>
-        <div className="text-xs opacity-90 mt-3">Das muss im Video zu sehen sein:</div>
-        <div className="flex flex-wrap gap-1.5 mt-1">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
-      </div>
-
-      <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">Dein Zugang · WS20-3</h3>
-        <div className="grid grid-cols-2 gap-3 mt-3 text-sm">
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Haustür-Code</div><div className="font-mono text-lg font-bold text-slate-800">100200</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Zimmer-Code</div><div className="font-mono text-lg font-bold text-slate-800">0000</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">Gast-WLAN</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">demo-passwort</div></div>
-        </div>
-        <div className="flex gap-2 mt-3">
-          <button className="flex-1 bg-slate-100 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">📋 Hausregeln</button>
-          <button className="flex-1 bg-slate-100 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">💬 WhatsApp-Gruppe</button>
-        </div>
-      </Card>
-
-      <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">Aufenthalt verlängern?</h3>
-        <p className="text-sm text-slate-500 mt-1">Auszug aktuell: 21.06.2026</p>
-        <button className="w-full mt-2 border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">+ Verlängerung anfragen</button>
-      </Card>
-
-      <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">Check-out · Live-Videoprüfung</h3>
-        {phase==="idle" &&
-          <button onClick={()=>evaluate(false)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-3 font-semibold">🎥 Auszugsvideo hochladen (20 € zurück)</button>}
-        {phase==="evaluating" &&
-          <div className="mt-3 flex items-center gap-3 text-slate-600 text-sm"><span className="animate-spin inline-block w-5 h-5 border-2 border-slate-300 border-t-blue-600 rounded-full"></span>Auswertung läuft… einen Moment ⏳</div>}
-        {(phase==="review"||phase==="done") &&
-          <div className="mt-3 grid grid-cols-2 gap-1">
-            {ELEMENTS.map((e,i)=>(
-              <div key={i} className={"flex items-center gap-2 text-sm "+(detected[e]?"text-emerald-700":"text-rose-600 font-semibold")}>
-                <span>{detected[e]?"✓":"✗"}</span><span>{e}</span>
-              </div>
-            ))}
-          </div>}
-        {phase==="review" && missing.length>0 &&
-          <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">
-            ⚠️ Fast geschafft! Bitte filme noch: <b>{missing.join(", ")}</b>.
-            <button onClick={()=>evaluate(true)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-2.5 font-semibold">🎥 {missing[0]}-Video nachreichen</button>
-          </div>}
-        {phase==="done" &&
-          <div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✅ Alle Elemente erkannt! Dein Video wird zur Freigabe vorgelegt – bei sauberem Zustand bekommst du 20 € zurück.</div>}
-      </Card>
-      <button onClick={()=>setStep("code")} className="text-xs text-slate-400 w-full text-center">← zurück</button>
     </div>
   );
 }
 
 /* ============================ SETTINGS ============================ */
-function Settings() {
-  const rules=["Strikte Ruhezeiten 22:00–06:00.","Rauchen nur in ausgewiesenen Außenbereichen.","Küche sofort nach Gebrauch reinigen.","Keine externen Gäste ohne Vorankündigung.","Beim Auszug Video an die zentrale E-Mail – ohne Video 100 € Reinigungsgebühr.","Müll entfernen & Kühlschrank leeren beim Auszug.","Respektvoller Umgang – kein Mobbing/Rassismus."];
+function SettingsView({onLogout,email}) {
+  const [settings]=useList(loaders.settings);
+  if(!settings) return <Loading/>;
+  const rules=(settings.find(s=>s.key==="house_rules")||{}).value;
+  const ruleList=Array.isArray(rules)?rules:(rules&&rules.en)?rules.en:[];
   return (
     <div className="space-y-6">
       <div><h1 className="text-2xl font-bold text-slate-800">Einstellungen</h1></div>
-      <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-2">🔗 Schnellzugriff</h2>
-        <div className="flex flex-wrap gap-2">{["Cleaning","Admin Dashboard","Energieberater App","Qonto"].map((l,i)=><span key={i} className="bg-indigo-50 text-indigo-700 rounded-lg px-3 py-1.5 text-sm">🔗 {l}</span>)}</div>
-      </Card>
-      <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-2">📋 Globale Hausregeln <span className="text-xs text-slate-400 font-normal">· Auto-Übersetzung DE/EN/CS/SK/RU</span></h2>
-        <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{rules.map((r,i)=><li key={i}>{r}</li>)}</ol>
-      </Card>
-      <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-2">📨 Kommunikation</h2>
-        <p className="text-sm text-slate-500">Adaptiv: Antwort auf dem Kanal, über den der Gast kommt. Start mit E-Mail; WhatsApp & Sipgate-SMS schaltbar.</p>
-      </Card>
+      <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">Konto</h2>
+        <p className="text-sm text-slate-500 mb-3">Angemeldet als {email}</p><Btn kind="soft" onClick={onLogout}>Abmelden</Btn></Card>
+      <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">📋 Hausregeln <span className="text-xs text-slate-400 font-normal">(aus settings)</span></h2>
+        {ruleList.length? <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{ruleList.map((r,i)=><li key={i}>{typeof r==="string"?r:JSON.stringify(r)}</li>)}</ol>
+          : <p className="text-sm text-slate-400">Keine Hausregeln im settings-Store gefunden ({settings.length} Keys).</p>}</Card>
+      <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">📨 Kommunikation</h2>
+        <p className="text-sm text-slate-500">Adaptiv: Antwort auf dem Kanal des Gastes (WhatsApp / Sipgate / E-Mail). Start mit E-Mail.</p></Card>
     </div>
   );
 }
 
+/* ============================ GUEST PORTAL ============================ */
+function Guest({onAdmin}) {
+  const [code,setCode]=useState(""),[booking,setBooking]=useState(null),[busy,setBusy]=useState(false);
+  const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
+  const [phase,setPhase]=useState("idle"),[detected,setDetected]=useState({});
+  const lookup=async()=>{ setBusy(true);
+    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url)").eq("code",code.trim().toUpperCase()).maybeSingle();
+    setBusy(false);
+    if(error||!data){ toast("Code nicht gefunden","err"); return; }
+    setBooking(data);
+  };
+  const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
+    if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
+  const missing=ELEMENTS.filter(e=>detected[e]===false);
+  if(!booking) return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="bg-slate-900 rounded-t-3xl p-6 text-center"><div className="w-14 h-14 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🏠</div>
+          <h2 className="text-white font-bold text-xl mt-3">Monteur Check-In</h2><p className="text-slate-400 text-sm">Zugang zu deinem Zimmer</p></div>
+        <div className="bg-white rounded-b-3xl p-6 shadow-lg">
+          <Field label="Reservierungscode"><input className={inputCls+" text-center font-mono uppercase"} value={code} onChange={e=>setCode(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&lookup()} placeholder="z.B. M79DGU"/></Field>
+          <Btn onClick={lookup} size="lg">{busy?"…":"→ Weiter"}</Btn>
+          <div className="text-center mt-4 pt-4 border-t border-slate-100"><button onClick={onAdmin} className="text-xs text-slate-400">Admin-Login</button></div>
+        </div>
+      </div>
+    </div>
+  );
+  const room=booking.rooms||{};
+  const checklist=["Jedes Zimmer & Bett","Boden & Bad","Kühlschrank leer","Kein Müll","Fenster geschlossen"];
+  return (
+    <div className="min-h-screen p-4"><div className="max-w-md mx-auto space-y-4 py-4">
+      <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-2xl p-5">
+        <div className="text-sm opacity-90">💶 Cashback-Aktion</div>
+        <div className="text-xl font-bold mt-1">Lade beim Auszug ein Video hoch – 20 € zurück, wenn alles sauber ist.</div>
+        <div className="text-xs opacity-90 mt-3">Das muss im Video zu sehen sein:</div>
+        <div className="flex flex-wrap gap-1.5 mt-1">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
+      </div>
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800">Hallo {booking.guest_name||"Gast"} · {room.room_number||""}</h3>
+        <p className="text-xs text-slate-400 mb-3">Aufenthalt: {fmt(booking.check_in_date)} – {fmt(booking.check_out_date)}</p>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Haustür-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Zimmer-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">{room.wifi_password||"—"}</div></div>
+        </div>
+      </Card>
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800">Check-out · Live-Videoprüfung</h3>
+        {phase==="idle"&&<button onClick={()=>evaluate(false)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-3 font-semibold">🎥 Auszugsvideo hochladen (20 € zurück)</button>}
+        {phase==="evaluating"&&<div className="mt-3 flex items-center gap-3 text-slate-600 text-sm"><span className="animate-spin inline-block w-5 h-5 border-2 border-slate-300 border-t-blue-600 rounded-full"></span>Auswertung läuft… einen Moment ⏳</div>}
+        {(phase==="review"||phase==="done")&&<div className="mt-3 grid grid-cols-2 gap-1">{ELEMENTS.map((e,i)=>(
+          <div key={i} className={"flex items-center gap-2 text-sm "+(detected[e]?"text-emerald-700":"text-rose-600 font-semibold")}><span>{detected[e]?"✓":"✗"}</span><span>{e}</span></div>))}</div>}
+        {phase==="review"&&missing.length>0&&<div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">⚠️ Fast geschafft! Bitte filme noch: <b>{missing.join(", ")}</b>.
+          <button onClick={()=>evaluate(true)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-2.5 font-semibold">🎥 {missing[0]}-Video nachreichen</button></div>}
+        {phase==="done"&&<div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✅ Alle Elemente erkannt! Wird zur Freigabe vorgelegt – bei sauberem Zustand 20 € zurück.</div>}
+      </Card>
+      <button onClick={()=>{setBooking(null);setCode("");setPhase("idle");}} className="text-xs text-slate-400 w-full text-center">← anderer Code</button>
+    </div></div>
+  );
+}
+
 /* ============================ SHELL ============================ */
-const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["rev","Auslastung & Umsatz","💶"],["set","Einstellungen","⚙️"]];
-function App() {
+const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["set","Einstellungen","⚙️"]];
+function Admin({session}) {
   const [view,setView]=useState("over");
-  const [guest,setGuest]=useState(false);
-  const go=(v)=>{const map={res:"res",checkins:"checkins",ext:"ext",clean:"clean"};setView(map[v]||v);};
-  const Body = guest ? <Guest/> : {
-    over:<Overview go={go}/>, res:<Reservations/>, rooms:<Rooms/>, checkins:<CheckIns/>, ext:<Extensions/>, clean:<Cleaning/>, rev:<Revenue/>, set:<Settings/>
-  }[view];
+  const go=setView;
+  const email=session.user?.email||"";
+  const logout=()=>sb.auth.signOut();
+  const Body={over:<Cockpit go={go}/>,res:<Reservations/>,rooms:<Rooms/>,checkins:<CheckIns/>,ext:<Extensions/>,clean:<Cleaning/>,occ:<Occupancy/>,set:<SettingsView onLogout={logout} email={email}/>}[view];
   return (
     <div className="min-h-screen">
       <header className="bg-slate-900 text-white">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center">🛡</div>
-            <div><div className="font-bold leading-tight">Monteur Check-In</div><div className="text-xs text-slate-400">JJ Real Estate · Rework-Prototyp</div></div>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <button onClick={()=>setGuest(g=>!g)} className={"px-3 py-1.5 rounded-lg font-semibold "+(guest?"bg-emerald-600":"bg-white/10")}>{guest?"← Admin":"👤 Gäste-Ansicht"}</button>
-            <span className="text-slate-300 hidden sm:inline">vangompel@jjrealestate.de</span>
-          </div>
+          <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center">🛡</div>
+            <div><div className="font-bold leading-tight">Monteur Check-In</div><div className="text-xs text-slate-400">JJ Real Estate · Rework (live)</div></div></div>
+          <div className="flex items-center gap-2 text-sm"><span className="text-slate-300 hidden sm:inline">{email}</span><button onClick={logout} className="px-3 py-1.5 rounded-lg bg-white/10 font-semibold">Logout</button></div>
         </div>
-        {!guest && <nav className="max-w-7xl mx-auto px-2 flex gap-1 overflow-x-auto">
-          {NAV.map(([k,l,ic])=>(
-            <button key={k} onClick={()=>setView(k)} className={"px-3 py-2.5 text-sm whitespace-nowrap border-b-2 "+(view===k?"border-blue-500 text-white font-semibold":"border-transparent text-slate-400 hover:text-white")}>{ic} {l}</button>
-          ))}
-        </nav>}
+        <nav className="max-w-7xl mx-auto px-2 flex gap-1 overflow-x-auto">{NAV.map(([k,l,ic])=>(
+          <button key={k} onClick={()=>setView(k)} className={"px-3 py-2.5 text-sm whitespace-nowrap border-b-2 "+(view===k?"border-blue-500 text-white font-semibold":"border-transparent text-slate-400 hover:text-white")}>{ic} {l}</button>))}</nav>
       </header>
       <main className="max-w-7xl mx-auto px-4 py-6">{Body}</main>
-      <footer className="text-center text-xs text-slate-400 py-6">Prototyp · Demo-Daten · {new Date().getFullYear()} Monteurshäuser Management GmbH</footer>
+      <footer className="text-center text-xs text-slate-400 py-6">Rework · live Supabase · {new Date().getFullYear()} JJ Real Estate</footer>
     </div>
   );
+}
+
+function App() {
+  const [session,setSession]=useState(undefined); // undefined=loading
+  const [guest,setGuest]=useState(false);
+  useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session));
+    const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
+  let body;
+  if(guest) body=<Guest onAdmin={()=>setGuest(false)}/>;
+  else if(session===undefined) body=<div className="min-h-screen flex items-center justify-center text-slate-400">Lädt…</div>;
+  else if(!session) body=<Login onGuest={()=>setGuest(true)}/>;
+  else body=<Admin session={session}/>;
+  return <React.Fragment><Toasts/>{body}</React.Fragment>;
 }
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
 </script>
