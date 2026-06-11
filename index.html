@@ -13,12 +13,14 @@
   body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#f1f5f9; }
   ::-webkit-scrollbar { width:10px; height:10px; }
   ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:6px; }
+  @keyframes pulsebar { 0%{opacity:.5} 50%{opacity:1} 100%{opacity:.5} }
+  .skel { background:#e2e8f0; border-radius:8px; animation:pulsebar 1.2s ease-in-out infinite; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useMemo } = React;
 
 const SUPABASE_URL = "https://nwsbkujlupugktzfrwdb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_UsM1ZkBCRBr5Nuiq7akc2A_W_K8bn_h";
@@ -30,25 +32,12 @@ const fmt = (d) => d ? new Date(d).toLocaleDateString("de-DE",{day:"2-digit",mon
 const fmtShort = (d) => d ? new Date(d).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"}) : "—";
 const daysFromToday = (d) => Math.round((new Date(new Date(d).toDateString()) - TODAY)/86400000);
 const genCode = () => "M"+Array.from({length:5},()=>"ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random()*32)]).join("");
+const roomShort = (rn) => rn ? rn.split("|")[0].trim() : "—";
 
-const stayOf = (r) => {
-  if (r.archived_at) return "left";
-  const dl = daysFromToday(r.check_out_date);
-  if (dl < 0) return "overdue";
-  if (dl <= 3) return "leaving";
-  return "active";
-};
-const stayBadge = (s) => ({
-  active:["Läuft","bg-emerald-100 text-emerald-700"],
-  leaving:["Läuft aus","bg-amber-100 text-amber-700"],
-  overdue:["Überfällig","bg-rose-100 text-rose-700"],
-  left:["Archiviert","bg-slate-100 text-slate-500"],
-}[s]||["—","bg-slate-100 text-slate-500"]);
-const statusPill = (s) => ({
-  occupied:["Belegt","bg-blue-100 text-blue-700"],
-  available:["Frei","bg-emerald-100 text-emerald-700"],
-  maintenance:["Wartung","bg-slate-200 text-slate-600"],
-}[s]||["—","bg-slate-100 text-slate-500"]);
+const stayOf = (r) => { if (r.archived_at) return "left"; const dl = daysFromToday(r.check_out_date);
+  if (dl < 0) return "overdue"; if (dl <= 3) return "leaving"; return "active"; };
+const stayBadge = (s) => ({ active:["Läuft","bg-emerald-100 text-emerald-700"], leaving:["Läuft aus","bg-amber-100 text-amber-700"],
+  overdue:["Überfällig","bg-rose-100 text-rose-700"], left:["Archiviert","bg-slate-100 text-slate-500"] }[s]||["—","bg-slate-100 text-slate-500"]);
 
 /* ---------- UI atoms ---------- */
 const Card = ({children, className=""}) => <div className={"bg-white rounded-2xl shadow-sm border border-slate-200 "+className}>{children}</div>;
@@ -59,13 +48,15 @@ const Btn = ({children,onClick,kind="primary",size="md",type="button"}) => {
     danger:"bg-rose-600 text-white hover:bg-rose-700",ghost:"bg-slate-100 text-slate-600 hover:bg-slate-200",
     soft:"bg-slate-200 text-slate-700 hover:bg-slate-300"}[kind];
   const s={sm:"px-2.5 py-1 text-xs",md:"px-3 py-1.5 text-sm",lg:"px-4 py-2 text-sm"}[size];
-  return <button type={type} onClick={onClick} className={"rounded-lg font-semibold "+k+" "+s}>{children}</button>;
+  return <button type={type} onClick={onClick} className={"rounded-lg font-semibold transition-colors "+k+" "+s}>{children}</button>;
 };
+const IconBtn = ({title,onClick,children,color="text-slate-500"}) =>
+  <button onClick={onClick} title={title} className={"px-1.5 py-1 rounded hover:bg-slate-100 "+color}>{children}</button>;
 function Modal({title,onClose,children}) {
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 sticky top-0 bg-white">
           <h3 className="font-semibold text-slate-800">{title}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
         </div>
@@ -75,16 +66,23 @@ function Modal({title,onClose,children}) {
   );
 }
 const Field = ({label,children}) => <label className="block mb-3"><span className="text-xs text-slate-500">{label}</span>{children}</label>;
-const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mt-1";
+const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mt-1 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none";
+const PageHead = ({title,sub,right}) => (
+  <div className="flex items-end justify-between flex-wrap gap-2">
+    <div><h1 className="text-2xl font-bold text-slate-800">{title}</h1>{sub&&<p className="text-slate-500 text-sm">{sub}</p>}</div>
+    {right}
+  </div>
+);
+const Skeleton = () => <div className="space-y-3">{[0,1,2].map(i=><div key={i} className="skel h-16"/>)}</div>;
+const Empty = ({children}) => <Card className="p-8 text-center text-slate-400">{children}</Card>;
 
 /* ---------- toast ---------- */
 let toastFn = ()=>{};
 function Toasts(){
   const [msgs,setMsgs]=useState([]);
-  toastFn=(text,kind="ok")=>{const id=Math.random();setMsgs(m=>[...m,{id,text,kind}]);setTimeout(()=>setMsgs(m=>m.filter(x=>x.id!==id)),3500);};
+  toastFn=(text,kind="ok")=>{const id=Math.random();setMsgs(m=>[...m,{id,text,kind}]);setTimeout(()=>setMsgs(m=>m.filter(x=>x.id!==id)),3200);};
   return <div className="fixed bottom-4 right-4 z-[60] space-y-2">{msgs.map(m=>(
-    <div key={m.id} className={"px-4 py-2 rounded-xl text-sm font-medium shadow-lg text-white "+(m.kind==="err"?"bg-rose-600":"bg-slate-800")}>{m.text}</div>
-  ))}</div>;
+    <div key={m.id} className={"px-4 py-2 rounded-xl text-sm font-medium shadow-lg text-white "+(m.kind==="err"?"bg-rose-600":"bg-slate-800")}>{m.text}</div>))}</div>;
 }
 const toast=(t,k)=>toastFn(t,k);
 const err=(e)=>{ console.error(e); toast((e&&e.message)||"Fehler","err"); };
@@ -92,21 +90,19 @@ const err=(e)=>{ console.error(e); toast((e&&e.message)||"Fehler","err"); };
 /* ============================ LOGIN ============================ */
 function Login({onGuest}) {
   const [email,setEmail]=useState(""),[pw,setPw]=useState(""),[busy,setBusy]=useState(false);
-  const login=async()=>{ setBusy(true);
-    const {error}=await sb.auth.signInWithPassword({email,password:pw});
-    setBusy(false); if(error) err(error); };
+  const login=async()=>{ if(!email||!pw) return toast("E-Mail & Passwort nötig","err"); setBusy(true);
+    const {error}=await sb.auth.signInWithPassword({email,password:pw}); setBusy(false); if(error) err(error); };
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="bg-slate-900 rounded-t-3xl p-6 text-center">
           <div className="w-14 h-14 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🛡</div>
-          <h2 className="text-white font-bold text-xl mt-3">Monteur Check-In</h2>
-          <p className="text-slate-400 text-sm">Admin-Anmeldung</p>
+          <h2 className="text-white font-bold text-xl mt-3">Monteur Check-In</h2><p className="text-slate-400 text-sm">Admin-Anmeldung</p>
         </div>
         <div className="bg-white rounded-b-3xl p-6 shadow-lg">
-          <Field label="E-Mail"><input className={inputCls} type="email" value={email} onChange={e=>setEmail(e.target.value)} /></Field>
-          <Field label="Passwort"><input className={inputCls} type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} /></Field>
-          <Btn onClick={login} size="lg">{busy?"…":"Anmelden"}</Btn>
+          <Field label="E-Mail"><input className={inputCls} type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()}/></Field>
+          <Field label="Passwort"><input className={inputCls} type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()}/></Field>
+          <Btn onClick={login} size="lg">{busy?"Anmelden…":"Anmelden"}</Btn>
           <div className="text-center mt-4 pt-4 border-t border-slate-100">
             <button onClick={onGuest} className="text-sm text-blue-700 font-semibold">Ich bin Gast → Check-in mit Code</button>
           </div>
@@ -116,33 +112,33 @@ function Login({onGuest}) {
   );
 }
 
-/* ============================ DATA HOOK ============================ */
+/* ============================ DATA ============================ */
 function useList(loader, deps=[]) {
   const [data,setData]=useState(null);
-  const reload=useCallback(async()=>{ try{ setData(await loader()); }catch(e){ err(e); setData([]); } },[]);
-  useEffect(()=>{ reload(); },deps);
+  const reload=useCallback(async()=>{ try{ setData(await loader()); }catch(e){ err(e); setData([]); } },deps);
+  useEffect(()=>{ let on=true; (async()=>{ try{ const d=await loader(); if(on)setData(d); }catch(e){ err(e); if(on)setData([]); } })(); return ()=>on=false; },deps);
   return [data,reload];
 }
 const loaders = {
-  rooms: async()=> (await sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number")).data||[],
-  roomsMin: async()=> (await sb.from("rooms").select("id,room_number").order("room_number")).data||[],
-  objekte: async()=> (await sb.from("cleaning_objekte").select("id,code,name,address").order("code")).data||[],
-  reservations: async()=> (await sb.from("reservations").select("*, rooms(room_number, cleaning_objekte(code))").order("check_in_date",{ascending:false})).data||[],
-  checkins: async()=> (await sb.from("check_ins").select("*, reservations(code, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50)).data||[],
-  extensions: async()=> (await sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false})).data||[],
-  nuki: async()=> (await sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name")).data||[],
-  orders: async()=> (await sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false})).data||[],
-  reports: async()=> (await sb.from("cleaning_reports").select("*, cleaning_objekte(code,name)").order("submitted_at",{ascending:false}).limit(40)).data||[],
-  settings: async()=> (await sb.from("settings").select("*")).data||[],
+  rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number").then(r=>r.data||[]),
+  roomsMin: ()=> sb.from("rooms").select("id,room_number").order("room_number").then(r=>r.data||[]),
+  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
+  reservations: ()=> sb.from("reservations").select("*, rooms(room_number, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
+  checkins: ()=> sb.from("check_ins").select("*, reservations(code, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
+  extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
+  nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
+  orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
+  reports: ()=> sb.from("cleaning_reports").select("*, cleaning_objekte(code,name)").order("submitted_at",{ascending:false}).limit(40).then(r=>r.data||[]),
+  settings: ()=> sb.from("settings").select("*").then(r=>r.data||[]),
 };
 
 /* ============================ COCKPIT ============================ */
-function Cockpit({go}) {
-  const [rooms]=useList(loaders.rooms);
-  const [res]=useList(loaders.reservations);
-  const [nuki]=useList(loaders.nuki);
-  const [ext]=useList(loaders.extensions);
-  if(!rooms||!res||!nuki||!ext) return <Loading/>;
+function Cockpit({go,bump}) {
+  const [rooms]=useList(loaders.rooms,[bump]);
+  const [res]=useList(loaders.reservations,[bump]);
+  const [nuki]=useList(loaders.nuki,[bump]);
+  const [ext]=useList(loaders.extensions,[bump]);
+  if(!rooms||!res||!nuki||!ext) return <Skeleton/>;
   const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_out_date)>=0);
   const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_out_date)<0);
   const leaving=active.filter(r=>daysFromToday(r.check_out_date)<=3);
@@ -156,13 +152,16 @@ function Cockpit({go}) {
   lowBat.forEach(n=>todo.push(["🔋",`Nuki-Akku niedrig: ${n.lock_name} (${n.battery_charge}%)`,"Reinigung",()=>go("clean"),"rose"]));
   if(!todo.length) todo.push(["✅","Nichts Dringendes – alles im grünen Bereich.","",null,"emerald"]);
   const toneCls={amber:"border-amber-300 bg-amber-50",rose:"border-rose-300 bg-rose-50",blue:"border-blue-300 bg-blue-50",emerald:"border-emerald-300 bg-emerald-50"};
-  const kpis=[["Belegung",rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100)+"%":"—","der Zimmer"],
-    ["Aktive Gäste",active.length,"Buchungen"],["Frei",free,"Zimmer"],["Überfällig",overdue.length,"Check-outs"]];
+  const occPct = rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
+  const kpis=[["Belegung",occPct+"%","der Zimmer","occ"],["Aktive Gäste",active.length,"Buchungen","res"],["Frei",free,"Zimmer","rooms"],["Überfällig",overdue.length,"Check-outs","res"]];
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-slate-800">Cockpit</h1><p className="text-slate-500">Live aus Supabase.</p></div>
+      <PageHead title="Cockpit" sub="Live aus Supabase."/>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((k,i)=><Card key={i} className="p-5"><div className="text-3xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]} · {k[2]}</div></Card>)}
+        {kpis.map((k,i)=>(
+          <button key={i} onClick={()=>go(k[3])} className="text-left">
+            <Card className="p-5 hover:shadow-md transition-shadow"><div className="text-3xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]} · {k[2]}</div></Card>
+          </button>))}
       </div>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">🎯 To-do</h2>
@@ -174,50 +173,51 @@ function Cockpit({go}) {
       </Card>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">🔒 Smart-Lock-Status (Nuki)</h2>
+        {!nuki.length? <p className="text-sm text-slate-400">Keine Lock-Daten.</p> :
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">{nuki.map((l,i)=>(
           <div key={i} className={"rounded-xl px-3 py-2 border "+(l.battery_charge<25?"border-rose-200 bg-rose-50":l.battery_charge<50?"border-amber-200 bg-amber-50":"border-emerald-200 bg-emerald-50")}>
             <div className="text-sm font-medium text-slate-700">{l.lock_name}</div>
-            <div className="flex justify-between text-xs"><Battery v={l.battery_charge}/><span className="text-slate-400">{l.battery_critical?"kritisch":""}</span></div>
-          </div>))}</div>
+            <div className="flex justify-between text-xs"><Battery v={l.battery_charge}/><span className="text-slate-400">{l.battery_critical?"kritisch":fmtShort(l.last_checked_at)}</span></div>
+          </div>))}</div>}
       </Card>
     </div>
   );
 }
-const Loading=()=> <div className="py-20 text-center text-slate-400">Lädt…</div>;
 
-/* ============================ RESERVATIONS (CRUD) ============================ */
-function Reservations() {
-  const [rows,reload]=useList(loaders.reservations);
-  const [roomOpts]=useList(loaders.roomsMin);
-  const [edit,setEdit]=useState(null); // object or 'new'
+/* ============================ RESERVATIONS ============================ */
+function Reservations({bump}) {
+  const [rows,reload]=useList(loaders.reservations,[bump]);
+  const [roomOpts]=useList(loaders.roomsMin,[bump]);
+  const [edit,setEdit]=useState(null);
   const [filter,setFilter]=useState("active");
-  if(!rows) return <Loading/>;
-  const shown=rows.filter(r=> filter==="all" ? true : filter==="archived" ? r.archived_at : !r.archived_at);
-  const save=async(form)=>{
-    try{
-      const payload={ guest_name:form.guest_name, guest_email:form.guest_email||null, room_id:form.room_id||null,
-        check_in_date:form.check_in_date, check_out_date:form.check_out_date, contact_channel:form.contact_channel||null,
-        preferred_language:form.preferred_language||"de" };
-      if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt"); }
-      else { const {error}=await sb.from("reservations").update(payload).eq("id",edit.id); if(error) throw error; toast("Gespeichert"); }
-      setEdit(null); reload();
-    }catch(e){ err(e); }
-  };
-  const del=async(r)=>{ if(!confirm(`Reservierung ${r.code} wirklich löschen?`))return;
+  const [q,setQ]=useState("");
+  if(!rows) return <Skeleton/>;
+  const counts={ active:rows.filter(r=>!r.archived_at).length, archived:rows.filter(r=>r.archived_at).length, all:rows.length };
+  const ql=q.trim().toLowerCase();
+  const shown=rows.filter(r=>{
+    const inFilter = filter==="all"?true:filter==="archived"?r.archived_at:!r.archived_at;
+    if(!inFilter) return false;
+    if(!ql) return true;
+    return [r.guest_name,r.code,r.guest_email].some(v=>(v||"").toLowerCase().includes(ql));
+  });
+  const save=async(form)=>{ try{
+    const payload={ guest_name:form.guest_name, guest_email:form.guest_email||null, room_id:form.room_id||null,
+      check_in_date:form.check_in_date, check_out_date:form.check_out_date, contact_channel:form.contact_channel||null, preferred_language:form.preferred_language||"de" };
+    if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt"); }
+    else { const {error}=await sb.from("reservations").update(payload).eq("id",edit.id); if(error) throw error; toast("Gespeichert"); }
+    setEdit(null); reload(); }catch(e){ err(e); } };
+  const del=async(r)=>{ if(!confirm(`Reservierung ${r.code} (${r.guest_name||"—"}) wirklich löschen?`))return;
     const {error}=await sb.from("reservations").delete().eq("id",r.id); if(error)return err(error); toast("Gelöscht"); reload(); };
   const archive=async(r)=>{ const {error}=await sb.from("reservations").update({archived_at:r.archived_at?null:new Date().toISOString()}).eq("id",r.id);
     if(error)return err(error); toast(r.archived_at?"Wiederhergestellt":"Archiviert"); reload(); };
-  const toggleQonto=async(r)=>{ const {error}=await sb.from("reservations").update({qonto_billed:!r.qonto_billed}).eq("id",r.id);
-    if(error)return err(error); reload(); };
+  const toggleQonto=async(r)=>{ const {error}=await sb.from("reservations").update({qonto_billed:!r.qonto_billed}).eq("id",r.id); if(error)return err(error); reload(); };
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div><h1 className="text-2xl font-bold text-slate-800">Reservierungen</h1><p className="text-slate-500">{rows.length} gesamt · live aus Supabase.</p></div>
-        <Btn onClick={()=>setEdit("new")} size="lg">+ Neue Reservierung</Btn>
-      </div>
-      <div className="flex gap-1 text-xs">
-        {[["active","Aktiv"],["archived","Archiviert"],["all","Alle"]].map(([k,l])=>(
-          <button key={k} onClick={()=>setFilter(k)} className={"px-3 py-1 rounded-lg font-semibold "+(filter===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>))}
+      <PageHead title="Reservierungen" sub={`${rows.length} gesamt · live`} right={<Btn onClick={()=>setEdit("new")} size="lg">+ Neue Reservierung</Btn>}/>
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex gap-1 text-xs">{[["active","Aktiv"],["archived","Archiviert"],["all","Alle"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setFilter(k)} className={"px-3 py-1.5 rounded-lg font-semibold "+(filter===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l} <span className="opacity-70">{counts[k]}</span></button>))}</div>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Name, Code, E-Mail…" className="flex-1 min-w-[180px] border border-slate-300 rounded-lg px-3 py-1.5 text-sm"/>
       </div>
       <Card className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -225,21 +225,21 @@ function Reservations() {
             <th className="text-left p-3">Gast</th><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Zeitraum</th>
             <th className="text-left p-3">Aufenthalt</th><th className="text-left p-3">Kanal</th><th className="text-center p-3">Qonto</th><th className="text-right p-3">Aktionen</th>
           </tr></thead>
-          <tbody>{shown.map(r=>{const[bt,bc]=stayBadge(stayOf(r));const room=r.rooms;return(
-            <tr key={r.id} className="border-t border-slate-100">
+          <tbody>{shown.map(r=>{const[bt,bc]=stayBadge(stayOf(r));const dl=daysFromToday(r.check_out_date);return(
+            <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
               <td className="p-3"><div className="font-semibold text-slate-800">{r.guest_name||"—"}</div><div className="text-xs text-slate-400">{r.code} · {r.guest_email||"—"}</div></td>
-              <td className="p-3 text-slate-600">{room?`${room.room_number}`:"—"}</td>
+              <td className="p-3 text-slate-600">{roomShort(r.rooms?.room_number)}</td>
               <td className="p-3 text-slate-600 whitespace-nowrap">{fmtShort(r.check_in_date)} – {fmtShort(r.check_out_date)}</td>
-              <td className="p-3"><Pill text={bt} cls={bc}/></td>
+              <td className="p-3"><Pill text={bt+(!r.archived_at&&dl>=0&&dl<=14?` · ${dl}d`:"")} cls={bc}/></td>
               <td className="p-3 text-slate-600">{r.contact_channel||"—"}</td>
-              <td className="p-3 text-center"><input type="checkbox" checked={!!r.qonto_billed} onChange={()=>toggleQonto(r)} className="w-4 h-4 accent-blue-600"/></td>
+              <td className="p-3 text-center"><input type="checkbox" checked={!!r.qonto_billed} onChange={()=>toggleQonto(r)} className="w-4 h-4 accent-blue-600" title="Rechnung in Qonto erstellt"/></td>
               <td className="p-3 text-right whitespace-nowrap">
-                <button onClick={()=>setEdit(r)} title="Bearbeiten" className="text-blue-600 px-1.5">✏️</button>
-                <button onClick={()=>archive(r)} title="Archivieren" className="text-amber-600 px-1.5">{r.archived_at?"↩️":"📦"}</button>
-                <button onClick={()=>del(r)} title="Löschen" className="text-rose-600 px-1.5">🗑</button>
+                <IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn>
+                <IconBtn title={r.archived_at?"Wiederherstellen":"Archivieren"} color="text-amber-600" onClick={()=>archive(r)}>{r.archived_at?"↩️":"📦"}</IconBtn>
+                <IconBtn title="Löschen" color="text-rose-600" onClick={()=>del(r)}>🗑</IconBtn>
               </td>
             </tr>);})}
-            {!shown.length&&<tr><td colSpan="7" className="p-6 text-center text-slate-400">Keine Einträge.</td></tr>}
+            {!shown.length&&<tr><td colSpan="7" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
           </tbody>
         </table>
       </Card>
@@ -250,8 +250,7 @@ function Reservations() {
 }
 function ResForm({rec,rooms,onSave,onClose}) {
   const [f,setF]=useState({ guest_name:rec?.guest_name||"", guest_email:rec?.guest_email||"", room_id:rec?.room_id||"",
-    check_in_date:rec?.check_in_date||"", check_out_date:rec?.check_out_date||"", contact_channel:rec?.contact_channel||"",
-    preferred_language:rec?.preferred_language||"de" });
+    check_in_date:rec?.check_in_date||"", check_out_date:rec?.check_out_date||"", contact_channel:rec?.contact_channel||"", preferred_language:rec?.preferred_language||"de" });
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
   return (
     <Modal title={rec?`Reservierung ${rec.code}`:"Neue Reservierung"} onClose={onClose}>
@@ -269,21 +268,19 @@ function ResForm({rec,rooms,onSave,onClose}) {
         <Field label="Sprache"><select className={inputCls} value={f.preferred_language} onChange={e=>u("preferred_language",e.target.value)}>
           <option value="de">DE</option><option value="en">EN</option><option value="cs">CS</option><option value="sk">SK</option><option value="ru">RU</option></select></Field>
       </div>
-      <div className="flex justify-end gap-2 mt-2">
-        <Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
-        <Btn kind="ok" onClick={()=>{ if(!f.guest_name||!f.check_in_date||!f.check_out_date) return toast("Name + Daten nötig","err"); onSave(f); }}>Speichern</Btn>
-      </div>
+      <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
+        <Btn kind="ok" onClick={()=>{ if(!f.guest_name||!f.check_in_date||!f.check_out_date) return toast("Name + Daten nötig","err"); onSave(f); }}>Speichern</Btn></div>
     </Modal>
   );
 }
 
-/* ============================ ROOMS (CRUD) ============================ */
-function Rooms() {
-  const [rows,reload]=useList(loaders.rooms);
-  const [objekte]=useList(loaders.objekte);
+/* ============================ ROOMS ============================ */
+function Rooms({bump}) {
+  const [rows,reload]=useList(loaders.rooms,[bump]);
+  const [objekte]=useList(loaders.objekte,[bump]);
   const [edit,setEdit]=useState(null);
-  if(!rows) return <Loading/>;
-  const setStatus=async(r,status)=>{ const {error}=await sb.from("rooms").update({status}).eq("id",r.id); if(error)return err(error); reload(); };
+  if(!rows) return <Skeleton/>;
+  const setStatus=async(r,status)=>{ const {error}=await sb.from("rooms").update({status}).eq("id",r.id); if(error)return err(error); toast("Status aktualisiert"); reload(); };
   const save=async(f)=>{ try{
     const p={room_number:f.room_number,objekt_id:f.objekt_id||null,capacity:Number(f.capacity)||1,status:f.status,
       door_code:f.door_code||null,house_door_code:f.house_door_code||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null};
@@ -292,31 +289,27 @@ function Rooms() {
     setEdit(null); reload(); }catch(e){err(e);} };
   const del=async(r)=>{ if(!confirm(`Zimmer ${r.room_number} löschen?`))return;
     const {error}=await sb.from("rooms").delete().eq("id",r.id); if(error)return err(error); toast("Gelöscht"); reload(); };
+  const groups={}; rows.forEach(r=>{const c=r.cleaning_objekte?.code||"Ohne Haus";(groups[c]=groups[c]||[]).push(r);});
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-slate-800">Zimmer</h1><p className="text-slate-500">{rows.length} Zimmer · live.</p></div><Btn onClick={()=>setEdit("new")} size="lg">+ Zimmer</Btn></div>
-      <Card className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr>
-            <th className="text-left p-3">Zimmer</th><th className="text-left p-3">Haus</th><th className="text-left p-3">Kap.</th>
-            <th className="text-left p-3">Türcode</th><th className="text-left p-3">WLAN</th><th className="text-left p-3">Status</th><th className="text-right p-3">Aktionen</th>
-          </tr></thead>
-          <tbody>{rows.map(r=>(
-            <tr key={r.id} className="border-t border-slate-100">
-              <td className="p-3 font-semibold text-slate-800">{r.room_number}</td>
-              <td className="p-3 text-slate-600">{r.cleaning_objekte?.code||"—"}</td>
-              <td className="p-3 text-slate-600">{r.capacity}</td>
-              <td className="p-3 font-mono text-amber-700">{r.door_code||"—"}</td>
-              <td className="p-3 text-slate-600">{r.wifi_ssid||"—"}</td>
-              <td className="p-3"><select value={r.status} onChange={e=>setStatus(r,e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1 text-xs">
-                <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></td>
-              <td className="p-3 text-right whitespace-nowrap">
-                <button onClick={()=>setEdit(r)} className="text-blue-600 px-1.5">✏️</button>
-                <button onClick={()=>del(r)} className="text-rose-600 px-1.5">🗑</button>
-              </td>
-            </tr>))}</tbody>
-        </table>
-      </Card>
+      <PageHead title="Zimmer" sub={`${rows.length} Zimmer · ${Object.keys(groups).length} Häuser`} right={<Btn onClick={()=>setEdit("new")} size="lg">+ Zimmer</Btn>}/>
+      {Object.entries(groups).map(([code,list])=>(
+        <Card key={code} className="overflow-hidden">
+          <div className="bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 flex justify-between">
+            <span>🏠 {code}</span><span className="text-xs text-slate-400 font-normal">{list.filter(r=>r.status==="occupied").length}/{list.length} belegt</span></div>
+          <table className="w-full text-sm">
+            <tbody>{list.map(r=>{const[pt,pc]=({occupied:["Belegt","bg-blue-100 text-blue-700"],available:["Frei","bg-emerald-100 text-emerald-700"],maintenance:["Wartung","bg-slate-200 text-slate-600"]}[r.status]||["—","bg-slate-100"]);return(
+              <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
+                <td className="p-3 font-semibold text-slate-800">{r.room_number}</td>
+                <td className="p-3 text-slate-500 text-xs">👤 {r.capacity}</td>
+                <td className="p-3 font-mono text-amber-700 text-xs">{r.door_code||"—"}</td>
+                <td className="p-3 text-slate-500 text-xs">📶 {r.wifi_ssid||"—"}</td>
+                <td className="p-3"><select value={r.status} onChange={e=>setStatus(r,e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1 text-xs">
+                  <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></td>
+                <td className="p-3 text-right whitespace-nowrap"><IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn><IconBtn title="Löschen" color="text-rose-600" onClick={()=>del(r)}>🗑</IconBtn></td>
+              </tr>);})}</tbody>
+          </table>
+        </Card>))}
       {edit&&<RoomForm rec={edit==="new"?null:edit} objekte={objekte||[]} onSave={save} onClose={()=>setEdit(null)}/>}
     </div>
   );
@@ -331,7 +324,7 @@ function RoomForm({rec,objekte,onSave,onClose}) {
       <div className="grid grid-cols-2 gap-3">
         <Field label="Haus"><select className={inputCls} value={f.objekt_id} onChange={e=>u("objekt_id",e.target.value)}>
           <option value="">—</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code}</option>)}</select></Field>
-        <Field label="Kapazität"><input type="number" className={inputCls} value={f.capacity} onChange={e=>u("capacity",e.target.value)}/></Field>
+        <Field label="Kapazität"><input type="number" min="1" className={inputCls} value={f.capacity} onChange={e=>u("capacity",e.target.value)}/></Field>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Zimmer-Türcode"><input className={inputCls} value={f.door_code} onChange={e=>u("door_code",e.target.value)}/></Field>
@@ -349,52 +342,52 @@ function RoomForm({rec,objekte,onSave,onClose}) {
 }
 
 /* ============================ CHECK-INS ============================ */
-function CheckIns() {
-  const [rows]=useList(loaders.checkins);
-  if(!rows) return <Loading/>;
+function CheckIns({bump}) {
+  const [rows]=useList(loaders.checkins,[bump]);
+  const [q,setQ]=useState("");
+  if(!rows) return <Skeleton/>;
+  const ql=q.trim().toLowerCase();
+  const shown=rows.filter(c=>!ql||[c.full_name,c.email,c.phone].some(v=>(v||"").toLowerCase().includes(ql)));
   return (
     <div className="space-y-4">
-      <div><h1 className="text-2xl font-bold text-slate-800">Check-ins</h1><p className="text-slate-500">{rows.length} (max 50) · live.</p></div>
+      <PageHead title="Check-ins" sub={`${rows.length} (max 50) · live`}/>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Name, E-Mail, Telefon…" className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm"/>
       <Card className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr>
           <th className="text-left p-3">Gast</th><th className="text-left p-3">Kontakt</th><th className="text-left p-3">Zimmer</th>
           <th className="text-left p-3">Eingecheckt</th><th className="text-left p-3">Ausweis</th><th className="text-left p-3">Check-out-Video</th></tr></thead>
-        <tbody>{rows.map(c=>(
-          <tr key={c.id} className="border-t border-slate-100">
+        <tbody>{shown.map(c=>(
+          <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
             <td className="p-3 font-semibold text-slate-800">{c.full_name}</td>
             <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}</td>
-            <td className="p-3 text-slate-600">{c.reservations?.rooms?.room_number||"—"}</td>
+            <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
             <td className="p-3 text-slate-600">{fmt(c.checked_in_at)}</td>
             <td className="p-3">{c.id_card_url?<span className="text-emerald-600 text-xs">✓ vorhanden</span>:<span className="text-slate-400 text-xs">—</span>}</td>
             <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
           </tr>))}
-          {!rows.length&&<tr><td colSpan="6" className="p-6 text-center text-slate-400">Keine Check-ins.</td></tr>}
+          {!shown.length&&<tr><td colSpan="6" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
         </tbody></table></Card>
-      <p className="text-xs text-slate-400">Ausweis-Links & Cashback-Freigabe folgen, sobald der KI-Video-Flow angebunden ist.</p>
+      <p className="text-xs text-slate-400">Ausweis-Links & Cashback-Freigabe folgen mit dem KI-Video-Flow.</p>
     </div>
   );
 }
 
 /* ============================ EXTENSIONS ============================ */
-function Extensions() {
-  const [rows,reload]=useList(loaders.extensions);
-  if(!rows) return <Loading/>;
+function Extensions({bump}) {
+  const [rows,reload]=useList(loaders.extensions,[bump]);
+  if(!rows) return <Skeleton/>;
   const decide=async(e,ok)=>{ try{
     const {error}=await sb.from("extension_requests").update({status:ok?"approved":"rejected"}).eq("id",e.id); if(error)throw error;
-    if(ok){ const resv=e.check_ins?.reservations; if(resv?.code && e.requested_checkout_date){
-      await sb.from("reservations").update({check_out_date:e.requested_checkout_date}).eq("code",resv.code); } }
-    toast(ok?"Freigegeben – Auszug verschoben":"Abgelehnt"); reload();
-  }catch(er){err(er);} };
+    if(ok){ const resv=e.check_ins?.reservations; if(resv?.code && e.requested_checkout_date){ await sb.from("reservations").update({check_out_date:e.requested_checkout_date}).eq("code",resv.code); } }
+    toast(ok?"Freigegeben – Auszug verschoben":"Abgelehnt"); reload(); }catch(er){err(er);} };
   return (
     <div className="space-y-4">
-      <div><h1 className="text-2xl font-bold text-slate-800">Verlängerungen</h1><p className="text-slate-500">Gast-Anfragen · Freigabe verschiebt den Auszugstermin.</p></div>
-      {!rows.length&&<Card className="p-8 text-center text-slate-400">Keine offenen Verlängerungs-Anfragen.</Card>}
+      <PageHead title="Verlängerungen" sub="Gast-Anfragen · Freigabe verschiebt den Auszugstermin."/>
+      {!rows.length&&<Empty>Keine offenen Verlängerungs-Anfragen.</Empty>}
       {rows.map(e=>{const r=e.check_ins?.reservations;return(
         <Card key={e.id} className="p-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="font-semibold text-slate-800">{e.check_ins?.full_name||r?.code||"Gast"} <span className="text-xs text-slate-400 font-normal">· {r?.rooms?.room_number||""}</span></div>
-            <div className="text-sm text-slate-500">Aktuell bis {fmt(r?.check_out_date)} → Wunsch: <b>{fmt(e.requested_checkout_date)}</b>{e.reason?` · ${e.reason}`:""}</div>
-          </div>
+          <div><div className="font-semibold text-slate-800">{e.check_ins?.full_name||r?.code||"Gast"} <span className="text-xs text-slate-400 font-normal">· {roomShort(r?.rooms?.room_number)}</span></div>
+            <div className="text-sm text-slate-500">Aktuell bis {fmt(r?.check_out_date)} → Wunsch: <b>{fmt(e.requested_checkout_date)}</b>{e.reason?` · ${e.reason}`:""}</div></div>
           {e.status==="pending"
             ? <div className="flex gap-2"><Btn kind="primary" onClick={()=>decide(e,true)}>Freigeben</Btn><Btn kind="soft" onClick={()=>decide(e,false)}>Ablehnen</Btn></div>
             : <Pill text={e.status==="approved"?"Freigegeben ✓":"Abgelehnt"} cls={e.status==="approved"?"bg-emerald-100 text-emerald-700":"bg-slate-200 text-slate-500"}/>}
@@ -404,17 +397,17 @@ function Extensions() {
 }
 
 /* ============================ CLEANING ============================ */
-function Cleaning() {
-  const [orders,reloadO]=useList(loaders.orders);
-  const [reports]=useList(loaders.reports);
-  const [objekte]=useList(loaders.objekte);
-  const [nuki]=useList(loaders.nuki);
-  if(!orders||!reports||!objekte||!nuki) return <Loading/>;
+function Cleaning({bump}) {
+  const [orders,reloadO]=useList(loaders.orders,[bump]);
+  const [reports]=useList(loaders.reports,[bump]);
+  const [objekte]=useList(loaders.objekte,[bump]);
+  const [nuki]=useList(loaders.nuki,[bump]);
+  if(!orders||!reports||!objekte||!nuki) return <Skeleton/>;
   const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
     if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-slate-800">Reinigung & Häuser</h1><p className="text-slate-500">Live aus Supabase.</p></div>
+      <PageHead title="Reinigung & Häuser" sub="Live aus Supabase."/>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">🧹 Offene Aufträge ({orders.length})</h2>
         <div className="space-y-2">{orders.map(o=>(
@@ -447,16 +440,14 @@ function Cleaning() {
 }
 
 /* ============================ OCCUPANCY ============================ */
-function Occupancy() {
-  const [rooms]=useList(loaders.rooms);
-  const [res]=useList(loaders.reservations);
-  if(!rooms||!res) return <Loading/>;
+function Occupancy({bump}) {
+  const [rooms]=useList(loaders.rooms,[bump]);
+  if(!rooms) return <Skeleton/>;
   const occ=rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
-  const byObjekt={};
-  rooms.forEach(r=>{const c=r.cleaning_objekte?.code||"—";byObjekt[c]=byObjekt[c]||{total:0,occ:0};byObjekt[c].total++;if(r.status==="occupied")byObjekt[c].occ++;});
+  const byObjekt={}; rooms.forEach(r=>{const c=r.cleaning_objekte?.code||"—";byObjekt[c]=byObjekt[c]||{total:0,occ:0};byObjekt[c].total++;if(r.status==="occupied")byObjekt[c].occ++;});
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-slate-800">Auslastung & Umsatz</h1><p className="text-slate-500">Auslastung live aus Zimmerstatus. Umsatz folgt mit Qonto-Anbindung.</p></div>
+      <PageHead title="Auslastung & Umsatz" sub="Auslastung live aus Zimmerstatus. Umsatz folgt mit Qonto-Anbindung."/>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung gesamt</div></Card>
         <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{rooms.filter(r=>r.status==="occupied").length}</div><div className="text-sm text-slate-500">belegte Zimmer</div></Card>
@@ -474,19 +465,19 @@ function Occupancy() {
 }
 
 /* ============================ SETTINGS ============================ */
-function SettingsView({onLogout,email}) {
-  const [settings]=useList(loaders.settings);
-  if(!settings) return <Loading/>;
+function SettingsView({onLogout,email,bump}) {
+  const [settings]=useList(loaders.settings,[bump]);
+  if(!settings) return <Skeleton/>;
   const rules=(settings.find(s=>s.key==="house_rules")||{}).value;
   const ruleList=Array.isArray(rules)?rules:(rules&&rules.en)?rules.en:[];
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-slate-800">Einstellungen</h1></div>
+      <PageHead title="Einstellungen"/>
       <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">Konto</h2>
         <p className="text-sm text-slate-500 mb-3">Angemeldet als {email}</p><Btn kind="soft" onClick={onLogout}>Abmelden</Btn></Card>
       <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">📋 Hausregeln <span className="text-xs text-slate-400 font-normal">(aus settings)</span></h2>
         {ruleList.length? <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{ruleList.map((r,i)=><li key={i}>{typeof r==="string"?r:JSON.stringify(r)}</li>)}</ol>
-          : <p className="text-sm text-slate-400">Keine Hausregeln im settings-Store gefunden ({settings.length} Keys).</p>}</Card>
+          : <p className="text-sm text-slate-400">Keine Hausregeln im settings-Store ({settings.length} Keys).</p>}</Card>
       <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">📨 Kommunikation</h2>
         <p className="text-sm text-slate-500">Adaptiv: Antwort auf dem Kanal des Gastes (WhatsApp / Sipgate / E-Mail). Start mit E-Mail.</p></Card>
     </div>
@@ -498,12 +489,9 @@ function Guest({onAdmin}) {
   const [code,setCode]=useState(""),[booking,setBooking]=useState(null),[busy,setBusy]=useState(false);
   const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
   const [phase,setPhase]=useState("idle"),[detected,setDetected]=useState({});
-  const lookup=async()=>{ setBusy(true);
-    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url)").eq("code",code.trim().toUpperCase()).maybeSingle();
-    setBusy(false);
-    if(error||!data){ toast("Code nicht gefunden","err"); return; }
-    setBooking(data);
-  };
+  const lookup=async()=>{ if(!code.trim())return; setBusy(true);
+    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules)").eq("code",code.trim().toUpperCase()).maybeSingle();
+    setBusy(false); if(error||!data){ toast("Code nicht gefunden","err"); return; } setBooking(data); };
   const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
     if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
   const missing=ELEMENTS.filter(e=>detected[e]===false);
@@ -521,6 +509,7 @@ function Guest({onAdmin}) {
     </div>
   );
   const room=booking.rooms||{};
+  const rules=Array.isArray(room.house_rules)?room.house_rules:[];
   const checklist=["Jedes Zimmer & Bett","Boden & Bad","Kühlschrank leer","Kein Müll","Fenster geschlossen"];
   return (
     <div className="min-h-screen p-4"><div className="max-w-md mx-auto space-y-4 py-4">
@@ -531,7 +520,7 @@ function Guest({onAdmin}) {
         <div className="flex flex-wrap gap-1.5 mt-1">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
       </div>
       <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">Hallo {booking.guest_name||"Gast"} · {room.room_number||""}</h3>
+        <h3 className="font-semibold text-slate-800">Hallo {booking.guest_name||"Gast"} · {roomShort(room.room_number)}</h3>
         <p className="text-xs text-slate-400 mb-3">Aufenthalt: {fmt(booking.check_in_date)} – {fmt(booking.check_out_date)}</p>
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Haustür-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
@@ -539,7 +528,10 @@ function Guest({onAdmin}) {
           <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
           <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">{room.wifi_password||"—"}</div></div>
         </div>
+        {room.whatsapp_url&&<a href={room.whatsapp_url} target="_blank" rel="noreferrer" className="block text-center mt-3 bg-emerald-600 text-white rounded-xl py-2.5 text-sm font-semibold">💬 WhatsApp-Gruppe öffnen</a>}
       </Card>
+      {rules.length>0&&<Card className="p-5"><h3 className="font-semibold text-slate-800 mb-2">📋 Hausregeln</h3>
+        <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{rules.map((r,i)=><li key={i}>{typeof r==="string"?r:(r.text||JSON.stringify(r))}</li>)}</ol></Card>}
       <Card className="p-5">
         <h3 className="font-semibold text-slate-800">Check-out · Live-Videoprüfung</h3>
         {phase==="idle"&&<button onClick={()=>evaluate(false)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-3 font-semibold">🎥 Auszugsvideo hochladen (20 € zurück)</button>}
@@ -550,7 +542,7 @@ function Guest({onAdmin}) {
           <button onClick={()=>evaluate(true)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-2.5 font-semibold">🎥 {missing[0]}-Video nachreichen</button></div>}
         {phase==="done"&&<div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✅ Alle Elemente erkannt! Wird zur Freigabe vorgelegt – bei sauberem Zustand 20 € zurück.</div>}
       </Card>
-      <button onClick={()=>{setBooking(null);setCode("");setPhase("idle");}} className="text-xs text-slate-400 w-full text-center">← anderer Code</button>
+      <button onClick={()=>{setBooking(null);setCode("");setPhase("idle");setDetected({});}} className="text-xs text-slate-400 w-full text-center">← anderer Code</button>
     </div></div>
   );
 }
@@ -559,17 +551,24 @@ function Guest({onAdmin}) {
 const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["set","Einstellungen","⚙️"]];
 function Admin({session}) {
   const [view,setView]=useState("over");
+  const [bump,setBump]=useState(0);
   const go=setView;
   const email=session.user?.email||"";
   const logout=()=>sb.auth.signOut();
-  const Body={over:<Cockpit go={go}/>,res:<Reservations/>,rooms:<Rooms/>,checkins:<CheckIns/>,ext:<Extensions/>,clean:<Cleaning/>,occ:<Occupancy/>,set:<SettingsView onLogout={logout} email={email}/>}[view];
+  const refresh=()=>{ setBump(b=>b+1); toast("Aktualisiert"); };
+  const Body={over:<Cockpit go={go} bump={bump}/>,res:<Reservations bump={bump}/>,rooms:<Rooms bump={bump}/>,checkins:<CheckIns bump={bump}/>,
+    ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
   return (
     <div className="min-h-screen">
-      <header className="bg-slate-900 text-white">
+      <header className="bg-slate-900 text-white sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center">🛡</div>
-            <div><div className="font-bold leading-tight">Monteur Check-In</div><div className="text-xs text-slate-400">JJ Real Estate · Rework (live)</div></div></div>
-          <div className="flex items-center gap-2 text-sm"><span className="text-slate-300 hidden sm:inline">{email}</span><button onClick={logout} className="px-3 py-1.5 rounded-lg bg-white/10 font-semibold">Logout</button></div>
+            <div><div className="font-bold leading-tight">Monteur Check-In</div><div className="text-xs text-slate-400">JJ Real Estate · live</div></div></div>
+          <div className="flex items-center gap-2 text-sm">
+            <button onClick={refresh} title="Aktualisieren" className="px-3 py-1.5 rounded-lg bg-white/10 font-semibold hover:bg-white/20">↻</button>
+            <span className="text-slate-300 hidden sm:inline">{email}</span>
+            <button onClick={logout} className="px-3 py-1.5 rounded-lg bg-white/10 font-semibold hover:bg-white/20">Logout</button>
+          </div>
         </div>
         <nav className="max-w-7xl mx-auto px-2 flex gap-1 overflow-x-auto">{NAV.map(([k,l,ic])=>(
           <button key={k} onClick={()=>setView(k)} className={"px-3 py-2.5 text-sm whitespace-nowrap border-b-2 "+(view===k?"border-blue-500 text-white font-semibold":"border-transparent text-slate-400 hover:text-white")}>{ic} {l}</button>))}</nav>
@@ -581,7 +580,7 @@ function Admin({session}) {
 }
 
 function App() {
-  const [session,setSession]=useState(undefined); // undefined=loading
+  const [session,setSession]=useState(undefined);
   const [guest,setGuest]=useState(false);
   useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session));
     const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
