@@ -139,12 +139,26 @@ function Cockpit({go,bump}) {
   const [nuki,reloadNuki]=useList(loaders.nuki,[bump]);
   const [ext]=useList(loaders.extensions,[bump]);
   if(!rooms||!res||!nuki||!ext) return <Skeleton/>;
-  const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_out_date)>=0);
-  const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_out_date)<0);
-  const leaving=active.filter(r=>daysFromToday(r.check_out_date)<=3);
+  const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0); // checked in, incl. überfällig
+  const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0 && daysFromToday(r.check_out_date)<0);
+  const leaving=active.filter(r=>{const d=daysFromToday(r.check_out_date);return d>=0&&d<=3;});
   const free=rooms.filter(r=>r.status==="available").length;
   const lowBat=nuki.filter(n=>n.battery_charge<25);
   const pendExt=ext.filter(e=>e.status==="pending");
+  // ---- metrics (archived bookings included for historical stats) ----
+  const dayMs=86400000, D=(d)=>new Date(d);
+  const nightsIn=(r,s,e)=>{const a=D(r.check_in_date),b=D(r.check_out_date);const st=Math.max(a,s),en=Math.min(b,e);return Math.max(0,Math.round((en-st)/dayMs));};
+  const occWin=(s,e)=>{const days=Math.max(1,Math.round((e-s)/dayMs));const cap=rooms.length*days;if(!cap)return 0;const used=res.reduce((a,r)=>a+(r.room_id?nightsIn(r,s,e):0),0);return Math.round(used/cap*100);};
+  const yStart=new Date(TODAY.getFullYear(),0,1);
+  const lmStart=new Date(TODAY.getFullYear(),TODAY.getMonth()-1,1), lmEnd=new Date(TODAY.getFullYear(),TODAY.getMonth(),1);
+  const fwd=(n)=>occWin(TODAY,new Date(TODAY.getTime()+n*dayMs));
+  const stayLen=(r)=>Math.max(0,Math.round((D(r.check_out_date)-D(r.check_in_date))/dayMs));
+  const avg=(arr,f)=>arr.length?Math.round(arr.reduce((a,x)=>a+f(x),0)/arr.length*10)/10:0;
+  const ytdRes=res.filter(r=>D(r.check_in_date)>=yStart && D(r.check_in_date)<=TODAY);
+  const lmRes=res.filter(r=>D(r.check_in_date)>=lmStart && D(r.check_in_date)<lmEnd);
+  const occToday=rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
+  const occRooms=rooms.filter(r=>r.status==="occupied");
+  const avgCap=occRooms.length?Math.round(occRooms.reduce((a,r)=>a+(r.capacity||1),0)/occRooms.length*10)/10:0;
   const todo=[];
   if(leaving.length) todo.push(["⏳",`${leaving.length} Aufenthalt(e) laufen in ≤3 Tagen aus`,"Reservierungen",()=>go("res"),"amber"]);
   if(overdue.length) todo.push(["⚠️",`${overdue.length} Aufenthalt(e) überfällig`,"Anzeigen",()=>go("res"),"rose"]);
@@ -152,16 +166,23 @@ function Cockpit({go,bump}) {
   lowBat.forEach(n=>todo.push(["🔋",`Nuki-Akku niedrig: ${n.lock_name} (${n.battery_charge}%)`,"Reinigung",()=>go("clean"),"rose"]));
   if(!todo.length) todo.push(["✅","Nichts Dringendes – alles im grünen Bereich.","",null,"emerald"]);
   const toneCls={amber:"border-amber-300 bg-amber-50",rose:"border-rose-300 bg-rose-50",blue:"border-blue-300 bg-blue-50",emerald:"border-emerald-300 bg-emerald-50"};
-  const occPct = rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
-  const kpis=[["Belegung",occPct+"%","der Zimmer","occ"],["Aktive Gäste",active.length,"Buchungen","res"],["Frei",free,"Zimmer","rooms"],["Überfällig",overdue.length,"Check-outs","res"]];
   return (
     <div className="space-y-6">
       <PageHead title="Cockpit" sub="Live aus Supabase."/>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((k,i)=>(
-          <button key={i} onClick={()=>go(k[3])} className="text-left">
-            <Card className="p-5 hover:shadow-md transition-shadow"><div className="text-3xl font-bold text-slate-800">{k[1]}</div><div className="text-sm text-slate-500">{k[0]} · {k[2]}</div></Card>
-          </button>))}
+        {[["Belegung heute",occToday+"%",`${rooms.filter(r=>r.status==="occupied").length}/${rooms.length} Zimmer`,"occ"],
+          ["Ø Belegung YTD",occWin(yStart,TODAY)+"%","seit Jahresbeginn","occ"],
+          ["Ø Belegung Vormonat",occWin(lmStart,lmEnd)+"%","letzter Monat","occ"],
+          ["Aktive Gäste",active.length,"inkl. überfällig","res"]
+        ].map((k,i)=><button key={i} onClick={()=>go(k[3])} className="text-left"><Card className="p-5 hover:shadow-md transition-shadow"><div className="text-2xl font-bold text-slate-800">{k[1]}</div><div className="text-xs text-slate-500">{k[0]} · {k[2]}</div></Card></button>)}
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[["Prognose Belegung 10 T.",fwd(10)+"%"],["Prognose 30 T.",fwd(30)+"%"],["Prognose 60 T.",fwd(60)+"%"],["Ø Bleibedauer YTD",avg(ytdRes,stayLen)+" N."]
+        ].map((k,i)=><Card key={i} className="p-5"><div className="text-2xl font-bold text-slate-800">{k[1]}</div><div className="text-xs text-slate-500">{k[0]}</div></Card>)}
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {[["Ø Bleibedauer Vormonat",avg(lmRes,stayLen)+" N."],["Ø Plätze/Zimmer (belegt)",avgCap||"—"],["Ø €/Nacht","€ —"],["Offene Rechnungsposten","—"]
+        ].map((k,i)=><Card key={i} className="p-5"><div className={"text-2xl font-bold "+(i<2?"text-slate-800":"text-slate-400")}>{k[1]}</div><div className="text-xs text-slate-500">{k[0]}{i>=2?" · Qonto folgt":""}</div></Card>)}
       </div>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">🎯 To-do</h2>
@@ -206,10 +227,14 @@ function Reservations({bump}) {
     if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt"); }
     else { const {error}=await sb.from("reservations").update(payload).eq("id",edit.id); if(error) throw error; toast("Gespeichert"); }
     setEdit(null); reload(); }catch(e){ err(e); } };
-  const del=async(r)=>{ if(!confirm(`Reservierung ${r.code} (${r.guest_name||"—"}) wirklich löschen?`))return;
+  const del=async(r)=>{ if(!confirm(`Reservierung ${r.code} (${r.guest_name||"—"}) löschen?\n\nTipp: Zum „Beenden" lieber archivieren. Löschen nur bei Fehlanlage. (1/2)`))return;
+    if(!confirm("Endgültig löschen? Das kann NICHT rückgängig gemacht werden. (2/2)"))return;
     const {error}=await sb.from("reservations").delete().eq("id",r.id); if(error)return err(error); toast("Gelöscht"); reload(); };
-  const archive=async(r)=>{ const {error}=await sb.from("reservations").update({archived_at:r.archived_at?null:new Date().toISOString()}).eq("id",r.id);
-    if(error)return err(error); toast(r.archived_at?"Wiederhergestellt":"Archiviert"); reload(); };
+  const archive=async(r)=>{ const archiving=!r.archived_at;
+    const {error}=await sb.from("reservations").update({archived_at:archiving?new Date().toISOString():null}).eq("id",r.id);
+    if(error)return err(error);
+    if(archiving && r.room_id) await sb.from("rooms").update({status:"available"}).eq("id",r.room_id);
+    toast(archiving?"Archiviert · Zimmer freigegeben":"Wiederhergestellt"); reload(); };
   const toggleQonto=async(r)=>{ const {error}=await sb.from("reservations").update({qonto_billed:!r.qonto_billed}).eq("id",r.id); if(error)return err(error); reload(); };
   return (
     <div className="space-y-4">
@@ -457,14 +482,15 @@ function Occupancy({bump}) {
   const [res]=useList(loaders.reservations,[bump]);
   const [dim,setDim]=useState("total");
   const [sel,setSel]=useState("__all__");
+  const [win,setWin]=useState(12);
   if(!rooms||!res) return <Skeleton/>;
   const roomHouse={}; rooms.forEach(r=>roomHouse[r.id]=r.cleaning_objekte?.code||"—");
   const now=new Date(); const months=[];
-  for(let i=-3;i<9;i++){ const d=new Date(now.getFullYear(),now.getMonth()+i,1); months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }
+  for(let i=-(win-4);i<4;i++){ const d=new Date(now.getFullYear(),now.getMonth()+i,1); months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }
   const mset=new Set(months);
   const md={}; months.forEach(m=>md[m]={total:0,byHouse:{},byCompany:{}});
   const houses=new Set(), companies=new Set();
-  res.forEach(r=>{ if(r.archived_at||!r.room_id||!r.check_in_date||!r.check_out_date) return;
+  res.forEach(r=>{ if(!r.room_id||!r.check_in_date||!r.check_out_date) return;
     const house=roomHouse[r.room_id]||"—", comp=r.guest_name||r.code||"—"; houses.add(house); companies.add(comp);
     let d=new Date(r.check_in_date); const end=new Date(r.check_out_date); let g=0;
     while(d<end && g<400){ const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
@@ -493,6 +519,7 @@ function Occupancy({bump}) {
         <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
           <h2 className="font-semibold text-slate-800">Zimmernächte pro Monat</h2>
           <div className="flex items-center gap-2 flex-wrap">
+            <select value={win} onChange={e=>setWin(+e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value={6}>6 Mon.</option><option value={12}>12 Mon.</option><option value={24}>24 Mon.</option></select>
             <div className="flex gap-1">{dimBtn("total","Gesamt")}{dimBtn("house","Nach Haus")}{dimBtn("company","Nach Firma")}</div>
             {dim!=="total"&&<select value={sel} onChange={e=>setSel(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="__all__">Alle</option>{options.map(o=><option key={o} value={o}>{o}</option>)}</select>}
           </div>
