@@ -124,7 +124,7 @@ const loaders = {
   roomsMin: ()=> sb.from("rooms").select("id,room_number").order("room_number").then(r=>r.data||[]),
   objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
-  checkins: ()=> sb.from("check_ins").select("*, reservations(code, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
+  checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
@@ -136,7 +136,7 @@ const loaders = {
 function Cockpit({go,bump}) {
   const [rooms]=useList(loaders.rooms,[bump]);
   const [res]=useList(loaders.reservations,[bump]);
-  const [nuki]=useList(loaders.nuki,[bump]);
+  const [nuki,reloadNuki]=useList(loaders.nuki,[bump]);
   const [ext]=useList(loaders.extensions,[bump]);
   if(!rooms||!res||!nuki||!ext) return <Skeleton/>;
   const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_out_date)>=0);
@@ -172,7 +172,7 @@ function Cockpit({go,bump}) {
           </div>))}</div>
       </Card>
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">🔒 Smart-Lock-Status (Nuki)</h2>
+        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🔒 Smart-Lock-Status (Nuki)</h2><button onClick={()=>{reloadNuki();toast("Nuki-Akkus aktualisiert");}} title="Akkustände neu laden" className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 font-semibold">↻ Akkus</button></div>
         {!nuki.length? <p className="text-sm text-slate-400">Keine Lock-Daten.</p> :
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">{nuki.map((l,i)=>(
           <div key={i} className={"rounded-xl px-3 py-2 border "+(l.battery_charge<25?"border-rose-200 bg-rose-50":l.battery_charge<50?"border-amber-200 bg-amber-50":"border-emerald-200 bg-emerald-50")}>
@@ -278,8 +278,12 @@ function ResForm({rec,rooms,onSave,onClose}) {
 function Rooms({bump}) {
   const [rows,reload]=useList(loaders.rooms,[bump]);
   const [objekte]=useList(loaders.objekte,[bump]);
+  const [res]=useList(loaders.reservations,[bump]);
   const [edit,setEdit]=useState(null);
   if(!rows) return <Skeleton/>;
+  const resByRoom={}; (res||[]).forEach(r=>{ if(!r.room_id||r.archived_at) return; (resByRoom[r.room_id]=resByRoom[r.room_id]||[]).push(r); });
+  const occupant=(id)=>{ const l=resByRoom[id]; if(!l||!l.length) return null;
+    return l.find(r=>daysFromToday(r.check_in_date)<=0&&daysFromToday(r.check_out_date)>=0) || l.slice().sort((a,b)=>new Date(b.check_out_date)-new Date(a.check_out_date))[0]; };
   const setStatus=async(r,status)=>{ const {error}=await sb.from("rooms").update({status}).eq("id",r.id); if(error)return err(error); toast("Status aktualisiert"); reload(); };
   const save=async(f)=>{ try{
     const p={room_number:f.room_number,objekt_id:f.objekt_id||null,capacity:Number(f.capacity)||1,status:f.status,
@@ -300,7 +304,7 @@ function Rooms({bump}) {
           <table className="w-full text-sm">
             <tbody>{list.map(r=>{const[pt,pc]=({occupied:["Belegt","bg-blue-100 text-blue-700"],available:["Frei","bg-emerald-100 text-emerald-700"],maintenance:["Wartung","bg-slate-200 text-slate-600"]}[r.status]||["—","bg-slate-100"]);return(
               <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
-                <td className="p-3 font-semibold text-slate-800">{r.room_number}</td>
+                <td className="p-3"><div className="font-semibold text-slate-800">{r.room_number}</div>{(()=>{const o=occupant(r.id);return o?<div className="text-xs font-medium text-blue-700">🏢 {o.guest_name||o.code} <span className={"font-normal "+(daysFromToday(o.check_out_date)<0?"text-rose-500":"text-slate-400")}>bis {fmtShort(o.check_out_date)}</span></div>:(r.status==="occupied"?<div className="text-xs text-slate-400">belegt · keine Buchung zugeordnet</div>:null);})()}</td>
                 <td className="p-3 text-slate-500 text-xs">👤 {r.capacity}</td>
                 <td className="p-3 font-mono text-amber-700 text-xs">{r.door_code||"—"}</td>
                 <td className="p-3 text-slate-500 text-xs">📶 {r.wifi_ssid||"—"}</td>
@@ -343,31 +347,39 @@ function RoomForm({rec,objekte,onSave,onClose}) {
 
 /* ============================ CHECK-INS ============================ */
 function CheckIns({bump}) {
-  const [rows]=useList(loaders.checkins,[bump]);
+  const [rows,reload]=useList(loaders.checkins,[bump]);
   const [q,setQ]=useState("");
   if(!rows) return <Skeleton/>;
   const ql=q.trim().toLowerCase();
-  const shown=rows.filter(c=>!ql||[c.full_name,c.email,c.phone].some(v=>(v||"").toLowerCase().includes(ql)));
+  const shown=rows.filter(c=>!ql||[c.full_name,c.email,c.phone,c.reservations?.guest_name].some(v=>(v||"").toLowerCase().includes(ql)));
+  const setVideoOk=async(c,ok)=>{ const {error}=await sb.from("check_ins").update({checkout_video_ok:ok,checkout_video_analyzed_at:new Date().toISOString()}).eq("id",c.id); if(error)return err(error); toast(ok?"Video als OK markiert":"Video beanstandet"); reload(); };
+  const th="text-left p-3 whitespace-nowrap";
   return (
     <div className="space-y-4">
       <PageHead title="Check-ins" sub={`${rows.length} (max 50) · live`}/>
-      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Name, E-Mail, Telefon…" className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm"/>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Name, Firma, E-Mail, Telefon…" className="w-full border border-slate-300 rounded-lg px-3 py-1.5 text-sm"/>
       <Card className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr>
-          <th className="text-left p-3">Gast</th><th className="text-left p-3">Kontakt</th><th className="text-left p-3">Zimmer</th>
-          <th className="text-left p-3">Eingecheckt</th><th className="text-left p-3">Ausweis</th><th className="text-left p-3">Check-out-Video</th></tr></thead>
-        <tbody>{shown.map(c=>(
+          <th className={th}>Gast</th><th className={th}>Firma</th><th className={th}>Kontakt</th><th className={th}>Zimmer</th>
+          <th className={th}>Eingecheckt</th><th className={th}>Ausweis</th><th className={th}>Check-in</th><th className={th}>Check-out-Video</th><th className={th}>Video-Analyse</th></tr></thead>
+        <tbody>{shown.map(c=>{ const ciDone=!!c.agreed_to_rules; const vid=!!c.checkout_completed_at||!!c.checkout_video_url; return (
           <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
             <td className="p-3 font-semibold text-slate-800">{c.full_name}</td>
+            <td className="p-3 text-slate-600">{c.reservations?.guest_name||"—"}</td>
             <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}</td>
             <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
             <td className="p-3 text-slate-600">{fmt(c.checked_in_at)}</td>
             <td className="p-3">{c.id_card_url?<span className="text-emerald-600 text-xs">✓ vorhanden</span>:<span className="text-slate-400 text-xs">—</span>}</td>
+            <td className="p-3">{ciDone?<Pill text="✓ abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
             <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
-          </tr>))}
-          {!shown.length&&<tr><td colSpan="6" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
+            <td className="p-3">{c.checkout_video_ok===true?<Pill text="OK ✓" cls="bg-emerald-100 text-emerald-700"/>
+              :c.checkout_video_ok===false?<Pill text="Beanstandet ✗" cls="bg-rose-100 text-rose-700"/>
+              :vid?<div className="flex gap-1"><button onClick={()=>setVideoOk(c,true)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold">OK</button><button onClick={()=>setVideoOk(c,false)} className="text-xs px-2 py-1 rounded bg-rose-600 text-white font-semibold">✗</button></div>
+              :<span className="text-slate-400 text-xs">—</span>}</td>
+          </tr>);})}
+          {!shown.length&&<tr><td colSpan="9" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
         </tbody></table></Card>
-      <p className="text-xs text-slate-400">Ausweis-Links & Cashback-Freigabe folgen mit dem KI-Video-Flow.</p>
+      <p className="text-xs text-slate-400">„Video-Analyse" jetzt manuell (OK/✗) → später automatisch durch die KI-Auswertung; speist die 20 €-Cashback-Freigabe.</p>
     </div>
   );
 }
@@ -442,24 +454,63 @@ function Cleaning({bump}) {
 /* ============================ OCCUPANCY ============================ */
 function Occupancy({bump}) {
   const [rooms]=useList(loaders.rooms,[bump]);
-  if(!rooms) return <Skeleton/>;
+  const [res]=useList(loaders.reservations,[bump]);
+  const [dim,setDim]=useState("total");
+  const [sel,setSel]=useState("__all__");
+  if(!rooms||!res) return <Skeleton/>;
+  const roomHouse={}; rooms.forEach(r=>roomHouse[r.id]=r.cleaning_objekte?.code||"—");
+  const now=new Date(); const months=[];
+  for(let i=-3;i<9;i++){ const d=new Date(now.getFullYear(),now.getMonth()+i,1); months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }
+  const mset=new Set(months);
+  const md={}; months.forEach(m=>md[m]={total:0,byHouse:{},byCompany:{}});
+  const houses=new Set(), companies=new Set();
+  res.forEach(r=>{ if(r.archived_at||!r.room_id||!r.check_in_date||!r.check_out_date) return;
+    const house=roomHouse[r.room_id]||"—", comp=r.guest_name||r.code||"—"; houses.add(house); companies.add(comp);
+    let d=new Date(r.check_in_date); const end=new Date(r.check_out_date); let g=0;
+    while(d<end && g<400){ const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      if(mset.has(m)){ md[m].total++; md[m].byHouse[house]=(md[m].byHouse[house]||0)+1; md[m].byCompany[comp]=(md[m].byCompany[comp]||0)+1; }
+      d.setDate(d.getDate()+1); g++; } });
+  const srcOf=(m)=> dim==="house"?md[m].byHouse: dim==="company"?md[m].byCompany: null;
+  const valueFor=(m)=>{ if(dim==="total") return md[m].total; const s=srcOf(m); return sel==="__all__"?Object.values(s).reduce((a,b)=>a+b,0):(s[sel]||0); };
+  const maxV=Math.max(1,...months.map(valueFor));
+  const options=dim==="house"?[...houses].sort(): dim==="company"?[...companies].sort():[];
+  const breakdown={}; if(dim!=="total"){ months.forEach(m=>{ Object.entries(srcOf(m)).forEach(([k,v])=>breakdown[k]=(breakdown[k]||0)+v); }); }
+  const brRows=Object.entries(breakdown).sort((a,b)=>b[1]-a[1]);
+  const windowTotal=months.reduce((a,m)=>a+md[m].total,0);
   const occ=rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
-  const byObjekt={}; rooms.forEach(r=>{const c=r.cleaning_objekte?.code||"—";byObjekt[c]=byObjekt[c]||{total:0,occ:0};byObjekt[c].total++;if(r.status==="occupied")byObjekt[c].occ++;});
+  const fmtMonth=(m)=>{const [y,mo]=m.split("-");return new Date(+y,+mo-1,1).toLocaleDateString("de-DE",{month:"short"});};
+  const dimBtn=(k,l)=><button key={k} onClick={()=>{setDim(k);setSel("__all__");}} className={"px-3 py-1.5 rounded-lg text-xs font-semibold "+(dim===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>;
   return (
     <div className="space-y-6">
-      <PageHead title="Auslastung & Umsatz" sub="Auslastung live aus Zimmerstatus. Umsatz folgt mit Qonto-Anbindung."/>
+      <PageHead title="Auslastung & Umsatz" sub="Belegte Zimmernächte pro Monat. Umsatz folgt mit Qonto."/>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung gesamt</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung heute</div></Card>
         <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{rooms.filter(r=>r.status==="occupied").length}</div><div className="text-sm text-slate-500">belegte Zimmer</div></Card>
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{rooms.filter(r=>r.status==="available").length}</div><div className="text-sm text-slate-500">freie Zimmer</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{windowTotal}</div><div className="text-sm text-slate-500">Zimmernächte (12 Mon.)</div></Card>
         <Card className="p-5"><div className="text-3xl font-bold text-slate-400">€ —</div><div className="text-sm text-slate-500">Umsatz (Qonto folgt)</div></Card>
       </div>
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">Belegung pro Haus</h2>
-        <div className="space-y-3">{Object.entries(byObjekt).map(([code,v])=>{const p=Math.round(v.occ/v.total*100);return(
-          <div key={code}><div className="flex justify-between text-sm mb-1"><span className="font-semibold text-slate-700">{code}</span><span className="text-slate-500">{v.occ}/{v.total} · {p}%</span></div>
-            <div className="h-3 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{width:p+"%"}}></div></div></div>);})}</div>
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+          <h2 className="font-semibold text-slate-800">Zimmernächte pro Monat</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex gap-1">{dimBtn("total","Gesamt")}{dimBtn("house","Nach Haus")}{dimBtn("company","Nach Firma")}</div>
+            {dim!=="total"&&<select value={sel} onChange={e=>setSel(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value="__all__">Alle</option>{options.map(o=><option key={o} value={o}>{o}</option>)}</select>}
+          </div>
+        </div>
+        <div className="flex items-end gap-2 h-48 overflow-x-auto">{months.map(m=>{const v=valueFor(m);const cur=m===`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}`;return(
+          <div key={m} className="flex-1 min-w-[40px] flex flex-col items-center justify-end h-full">
+            <div className="text-xs font-semibold text-slate-700">{v||""}</div>
+            <div className={"w-full rounded-t-lg "+(cur?"bg-blue-600":"bg-blue-400")} style={{height:(v/maxV*100)+"%"}}></div>
+            <div className="text-[10px] text-slate-500 mt-1">{fmtMonth(m)}</div>
+          </div>);})}</div>
       </Card>
+      {dim!=="total"&&<Card className="p-5">
+        <h2 className="font-semibold text-slate-800 mb-3">{dim==="house"?"Nach Haus":"Nach Firma"} · Zimmernächte (12 Mon.)</h2>
+        <div className="space-y-2">{brRows.map(([k,v])=>{const p=windowTotal?Math.round(v/windowTotal*100):0;return(
+          <div key={k}><div className="flex justify-between text-sm mb-1"><button onClick={()=>setSel(sel===k?"__all__":k)} className={"font-semibold text-left hover:underline "+(sel===k?"text-blue-700":"text-slate-700")}>{k}</button><span className="text-slate-500">{v} · {p}%</span></div>
+            <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{width:p+"%"}}></div></div></div>);})}
+          {!brRows.length&&<p className="text-sm text-slate-400">Keine Daten im Zeitraum.</p>}</div>
+      </Card>}
     </div>
   );
 }
