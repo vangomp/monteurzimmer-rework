@@ -136,6 +136,7 @@ const loaders = {
   reports: ()=> sb.from("cleaning_reports").select("*, cleaning_objekte(code,name)").order("submitted_at",{ascending:false}).limit(40).then(r=>r.data||[]),
   settings: ()=> sb.from("settings").select("*").then(r=>r.data||[]),
   issues: ()=> sb.from("guest_issues").select("*").order("created_at",{ascending:false}).then(r=>r.data||[]),
+  qonto: ()=> sb.from("qonto_invoices").select("*").order("issue_date",{ascending:false}).then(r=>r.data||[]),
 };
 
 /* ============================ COCKPIT ============================ */
@@ -145,7 +146,8 @@ function Cockpit({go,bump}) {
   const [nuki,reloadNuki]=useList(loaders.nuki,[bump]);
   const [ext]=useList(loaders.extensions,[bump]);
   const [issues]=useList(loaders.issues,[bump]);
-  if(!rooms||!res||!nuki||!ext||!issues) return <Skeleton/>;
+  const [qi]=useList(loaders.qonto,[bump]);
+  if(!rooms||!res||!nuki||!ext||!issues||!qi) return <Skeleton/>;
   const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0); // checked in, incl. überfällig
   const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0 && daysFromToday(r.check_out_date)<0);
   const leaving=active.filter(r=>{const d=daysFromToday(r.check_out_date);return d>=0&&d<=3;});
@@ -166,6 +168,12 @@ function Cockpit({go,bump}) {
   const occToday=rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
   const occRooms=rooms.filter(r=>r.status==="occupied");
   const avgCap=occRooms.length?Math.round(occRooms.reduce((a,r)=>a+(r.capacity||1),0)/occRooms.length*10)/10:0;
+  const ytdNights=res.reduce((a,r)=>a+(r.room_id?nightsIn(r,yStart,TODAY):0),0);
+  const invActive=qi.filter(x=>(x.status||"").toLowerCase()!=="canceled");
+  const invoicedTotal=invActive.reduce((a,x)=>a+(+x.amount||0),0);
+  const openInv=qi.filter(x=>["unpaid","overdue","pending","draft"].includes((x.status||"").toLowerCase()));
+  const openInvSum=Math.round(openInv.reduce((a,x)=>a+(+x.amount||0),0));
+  const eurNight=qi.length&&ytdNights?Math.round(invoicedTotal/ytdNights):null;
   const todo=[];
   if(leaving.length) todo.push(["⏳",`${leaving.length} Aufenthalt(e) laufen in ≤3 Tagen aus`,"Reservierungen",()=>go("res"),"amber"]);
   if(overdue.length) todo.push(["⚠️",`${overdue.length} Aufenthalt(e) überfällig`,"Anzeigen",()=>go("res"),"rose"]);
@@ -190,8 +198,10 @@ function Cockpit({go,bump}) {
         ].map((k,i)=><Card key={i} className="p-5"><div className="text-2xl font-bold text-slate-800">{k[1]}</div><div className="text-xs text-slate-500">{k[0]}</div></Card>)}
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {[["Ø Bleibedauer Vormonat",avg(lmRes,stayLen)+" N."],["Ø Plätze/Zimmer (belegt)",avgCap||"—"],["Ø €/Nacht","€ —"],["Offene Rechnungsposten","—"]
-        ].map((k,i)=><Card key={i} className="p-5"><div className={"text-2xl font-bold "+(i<2?"text-slate-800":"text-slate-400")}>{k[1]}</div><div className="text-xs text-slate-500">{k[0]}{i>=2?" · Qonto folgt":""}</div></Card>)}
+        {[["Ø Bleibedauer Vormonat",avg(lmRes,stayLen)+" N.",true],["Ø Plätze/Zimmer (belegt)",avgCap||"—",true],
+          ["Ø €/Nacht",eurNight!=null?"€ "+eurNight:"€ —",qi.length>0],
+          ["Offene Rechnungsposten",qi.length?`${openInv.length} · €${openInvSum}`:"—",qi.length>0]
+        ].map((k,i)=><Card key={i} className="p-5"><div className={"text-2xl font-bold "+(k[2]?"text-slate-800":"text-slate-400")}>{k[1]}</div><div className="text-xs text-slate-500">{k[0]}{!k[2]?" · Qonto folgt":""}</div></Card>)}
       </div>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">🎯 To-do</h2>
@@ -733,6 +743,41 @@ function Guest({onAdmin}) {
   );
 }
 
+/* ============================ RECHNUNGSWESEN (Qonto) ============================ */
+function Accounting({bump}) {
+  const [inv,reload]=useList(loaders.qonto,[bump]);
+  if(!inv) return <Skeleton/>;
+  const cur=(n)=>"€ "+(Math.round((+n||0)*100)/100).toLocaleString("de-DE");
+  const st=(x)=>(x.status||"").toLowerCase();
+  const isOpen=(x)=>["unpaid","overdue","pending","draft"].includes(st(x));
+  const isOverdue=(x)=>st(x)==="overdue" || (isOpen(x)&&x.due_date&&daysFromToday(x.due_date)<0);
+  const total=inv.filter(x=>st(x)!=="canceled").reduce((a,x)=>a+(+x.amount||0),0);
+  const paid=inv.filter(x=>st(x)==="paid").reduce((a,x)=>a+(+x.amount||0),0);
+  const open=inv.filter(isOpen); const openSum=open.reduce((a,x)=>a+(+x.amount||0),0);
+  const byCo={}; inv.forEach(x=>{const c=x.company||"—"; const o=byCo[c]=byCo[c]||{billed:0,paid:0,open:0,n:0}; o.n++; if(st(x)!=="canceled")o.billed+=(+x.amount||0); if(st(x)==="paid")o.paid+=(+x.amount||0); if(isOpen(x))o.open+=(+x.amount||0);});
+  const coRows=Object.entries(byCo).sort((a,b)=>b[1].billed-a[1].billed);
+  return (
+    <div className="space-y-6">
+      <PageHead title="Rechnungswesen pro Firma" sub="Aus Qonto (Sync über den Connector)." right={<a href="https://app.qonto.com" target="_blank" rel="noreferrer" className="text-sm font-semibold text-blue-700">Qonto öffnen ↗</a>}/>
+      {!inv.length && <Empty>Noch keine Qonto-Daten. In einem neuen Chat „Qonto-Rechnungen synchronisieren" ausführen — dann erscheinen sie hier.</Empty>}
+      {inv.length>0 && <React.Fragment>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <Card className="p-5"><div className="text-2xl font-bold text-slate-800">{cur(total)}</div><div className="text-xs text-slate-500">Fakturiert</div></Card>
+          <Card className="p-5"><div className="text-2xl font-bold text-emerald-600">{cur(paid)}</div><div className="text-xs text-slate-500">Bezahlt</div></Card>
+          <Card className="p-5"><div className="text-2xl font-bold text-amber-600">{cur(openSum)}</div><div className="text-xs text-slate-500">Offen ({open.length})</div></Card>
+          <Card className="p-5"><div className="text-2xl font-bold text-rose-600">{open.filter(isOverdue).length}</div><div className="text-xs text-slate-500">überfällig</div></Card>
+        </div>
+        <Card className="overflow-x-auto"><table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-3">Firma</th><th className="text-right p-3">Rechn.</th><th className="text-right p-3">Fakturiert</th><th className="text-right p-3">Bezahlt</th><th className="text-right p-3">Offen</th></tr></thead>
+          <tbody>{coRows.map(([c,o])=>(<tr key={c} className="border-t border-slate-100 hover:bg-slate-50"><td className="p-3 font-medium text-slate-800">{c}</td><td className="p-3 text-right text-slate-600">{o.n}</td><td className="p-3 text-right text-slate-700">{cur(o.billed)}</td><td className="p-3 text-right text-emerald-600">{cur(o.paid)}</td><td className="p-3 text-right text-amber-600">{cur(o.open)}</td></tr>))}</tbody>
+        </table></Card>
+        <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-3">Offene Posten</h2>
+          <div className="space-y-2">{open.length?open.map(x=>(<div key={x.id} className={"flex justify-between items-center border rounded-xl px-4 py-2 "+(isOverdue(x)?"border-rose-200 bg-rose-50":"border-slate-200")}><div className="font-medium text-slate-800 text-sm">{x.company||"—"} <span className="text-xs text-slate-400 font-normal">· {x.invoice_number||""} · fällig {fmt(x.due_date)}</span></div><div className="font-semibold text-slate-800">{cur(x.amount)}</div></div>)):<p className="text-sm text-slate-400">Keine offenen Posten.</p>}</div></Card>
+      </React.Fragment>}
+    </div>
+  );
+}
+
 /* ============================ MELDUNGEN ============================ */
 function Meldungen({bump}) {
   const [rows,reload]=useList(loaders.issues,[bump]);
@@ -754,7 +799,7 @@ function Meldungen({bump}) {
 }
 
 /* ============================ SHELL ============================ */
-const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["msg","Meldungen","📨"],["set","Einstellungen","⚙️"]];
+const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["acct","Rechnungswesen","🧾"],["msg","Meldungen","📨"],["set","Einstellungen","⚙️"]];
 function Admin({session}) {
   const [view,setView]=useState("over");
   const [bump,setBump]=useState(0);
@@ -763,7 +808,7 @@ function Admin({session}) {
   const logout=()=>sb.auth.signOut();
   const refresh=()=>{ setBump(b=>b+1); toast("Aktualisiert"); };
   const Body={over:<Cockpit go={go} bump={bump}/>,res:<Reservations bump={bump}/>,rooms:<Rooms bump={bump}/>,checkins:<CheckIns bump={bump}/>,
-    ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,msg:<Meldungen bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
+    ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Meldungen bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
   return (
     <div className="min-h-screen">
       <header className="bg-slate-900 text-white sticky top-0 z-40">
