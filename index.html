@@ -516,19 +516,52 @@ function Occupancy({bump}) {
 }
 
 /* ============================ SETTINGS ============================ */
+const mmTranslate=async(text,from,to)=>{ try{
+  const res=await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`);
+  const j=await res.json(); const t=j&&j.responseData&&j.responseData.translatedText;
+  return (t&&!/MYMEMORY WARNING|QUERY LENGTH LIMIT/i.test(t))?t:text;
+}catch(e){ return text; } };
+
+function HouseRulesEditor() {
+  const [rules,setRules]=useState(null); const [busy,setBusy]=useState(false);
+  useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>setRules(Array.isArray(data?.value)?data.value:[])); },[]);
+  if(!rules) return <Card className="p-5"><div className="skel h-20"/></Card>;
+  const setDe=(i,v)=>setRules(rs=>rs.map((r,j)=>j===i?{...r,de:v}:r));
+  const add=()=>setRules(rs=>[...rs,{de:""}]);
+  const remove=(i)=>setRules(rs=>rs.filter((_,j)=>j!==i));
+  const save=async()=>{ const clean=rules.filter(r=>(r.de||"").trim());
+    const {error}=await sb.from("settings").update({value:clean,updated_at:new Date().toISOString()}).eq("key","house_rules");
+    if(error)return err(error); setRules(clean); toast("Hausregeln gespeichert (DE)"); };
+  const translate=async()=>{ setBusy(true); try{ const targets=["en","cs","sk","ru"]; const out=[];
+    for(const r of rules){ const de=(r.de||"").trim(); if(!de) continue; const obj={de};
+      for(const t of targets){ obj[t]=await mmTranslate(de,"de",t); } out.push(obj); }
+    const {error}=await sb.from("settings").update({value:out,updated_at:new Date().toISOString()}).eq("key","house_rules"); if(error)throw error;
+    setRules(out); toast("Übersetzt & gespeichert (DE→EN/CS/SK/RU)"); }catch(e){err(e);} setBusy(false); };
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 className="font-semibold text-slate-800">📋 Hausregeln <span className="text-xs text-slate-400 font-normal">· Pflege auf Deutsch</span></h2>
+        <div className="flex gap-2"><Btn kind="soft" size="sm" onClick={add}>+ Regel</Btn><Btn kind="ok" size="sm" onClick={save}>Speichern</Btn></div></div>
+      <div className="space-y-2">{rules.map((r,i)=>(
+        <div key={i} className="flex gap-2 items-start"><span className="text-xs text-slate-400 pt-2.5 w-5 text-right">{i+1}.</span>
+          <div className="flex-1"><textarea value={r.de||""} onChange={e=>setDe(i,e.target.value)} rows={2} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"/>
+            <div className="mt-0.5">{(r.en&&r.cs&&r.sk&&r.ru)?<span className="text-[11px] text-emerald-600 font-medium">✓ übersetzt (EN/CS/SK/RU)</span>:<span className="text-[11px] text-amber-600 font-medium">⚠️ noch nicht übersetzt</span>}</div></div>
+          <button onClick={()=>remove(i)} title="Löschen" className="text-rose-600 px-2 pt-2">🗑</button></div>))}
+        {!rules.length&&<p className="text-sm text-slate-400">Noch keine Regeln. „+ Regel" zum Hinzufügen.</p>}</div>
+      <div className="mt-4 pt-4 border-t border-slate-100 flex items-center gap-3 flex-wrap">
+        <Btn kind="primary" onClick={translate}>{busy?"Übersetzt…":"🌐 Jetzt übersetzen (DE → EN/CS/SK/RU)"}</Btn>
+        <span className="text-xs text-slate-400">Gäste sehen die Regeln automatisch in ihrer Sprache.</span></div>
+    </Card>
+  );
+}
+
 function SettingsView({onLogout,email,bump}) {
-  const [settings]=useList(loaders.settings,[bump]);
-  if(!settings) return <Skeleton/>;
-  const rules=(settings.find(s=>s.key==="house_rules")||{}).value;
-  const ruleList=Array.isArray(rules)?rules:(rules&&rules.en)?rules.en:[];
   return (
     <div className="space-y-6">
       <PageHead title="Einstellungen"/>
       <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">Konto</h2>
         <p className="text-sm text-slate-500 mb-3">Angemeldet als {email}</p><Btn kind="soft" onClick={onLogout}>Abmelden</Btn></Card>
-      <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">📋 Hausregeln <span className="text-xs text-slate-400 font-normal">(aus settings)</span></h2>
-        {ruleList.length? <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{ruleList.map((r,i)=><li key={i}>{typeof r==="string"?r:JSON.stringify(r)}</li>)}</ol>
-          : <p className="text-sm text-slate-400">Keine Hausregeln im settings-Store ({settings.length} Keys).</p>}</Card>
+      <HouseRulesEditor/>
       <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">📨 Kommunikation</h2>
         <p className="text-sm text-slate-500">Adaptiv: Antwort auf dem Kanal des Gastes (WhatsApp / Sipgate / E-Mail). Start mit E-Mail.</p></Card>
     </div>
@@ -540,9 +573,11 @@ function Guest({onAdmin}) {
   const [code,setCode]=useState(""),[booking,setBooking]=useState(null),[busy,setBusy]=useState(false);
   const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
   const [phase,setPhase]=useState("idle"),[detected,setDetected]=useState({});
+  const [hr,setHr]=useState([]); const [glang,setGlang]=useState("de");
+  useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
   const lookup=async()=>{ if(!code.trim())return; setBusy(true);
     const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules)").eq("code",code.trim().toUpperCase()).maybeSingle();
-    setBusy(false); if(error||!data){ toast("Code nicht gefunden","err"); return; } setBooking(data); };
+    setBusy(false); if(error||!data){ toast("Code nicht gefunden","err"); return; } setBooking(data); setGlang(data.preferred_language||"de"); };
   const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
     if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
   const missing=ELEMENTS.filter(e=>detected[e]===false);
@@ -560,7 +595,6 @@ function Guest({onAdmin}) {
     </div>
   );
   const room=booking.rooms||{};
-  const rules=Array.isArray(room.house_rules)?room.house_rules:[];
   const checklist=["Jedes Zimmer & Bett","Boden & Bad","Kühlschrank leer","Kein Müll","Fenster geschlossen"];
   return (
     <div className="min-h-screen p-4"><div className="max-w-md mx-auto space-y-4 py-4">
@@ -581,8 +615,10 @@ function Guest({onAdmin}) {
         </div>
         {room.whatsapp_url&&<a href={room.whatsapp_url} target="_blank" rel="noreferrer" className="block text-center mt-3 bg-emerald-600 text-white rounded-xl py-2.5 text-sm font-semibold">💬 WhatsApp-Gruppe öffnen</a>}
       </Card>
-      {rules.length>0&&<Card className="p-5"><h3 className="font-semibold text-slate-800 mb-2">📋 Hausregeln</h3>
-        <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{rules.map((r,i)=><li key={i}>{typeof r==="string"?r:(r.text||JSON.stringify(r))}</li>)}</ol></Card>}
+      {hr.length>0&&<Card className="p-5">
+        <div className="flex items-center justify-between mb-2"><h3 className="font-semibold text-slate-800">📋 Hausregeln</h3>
+          <div className="flex gap-1">{["de","en","cs","sk","ru"].map(l=><button key={l} onClick={()=>setGlang(l)} className={"text-xs px-2 py-1 rounded font-semibold "+(glang===l?"bg-blue-600 text-white":"bg-slate-100 text-slate-500")}>{l.toUpperCase()}</button>)}</div></div>
+        <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>)}</ol></Card>}
       <Card className="p-5">
         <h3 className="font-semibold text-slate-800">Check-out · Live-Videoprüfung</h3>
         {phase==="idle"&&<button onClick={()=>evaluate(false)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-3 font-semibold">🎥 Auszugsvideo hochladen (20 € zurück)</button>}
