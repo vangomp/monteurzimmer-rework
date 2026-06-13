@@ -817,7 +817,7 @@ function Accounting({bump}) {
   const togglePaid=(x)=> patch(x.id, isPaid(x)?{paid_at:null,status:"unpaid"}:{paid_at:new Date().toISOString().slice(0,10),status:"paid"});
   const toggleArchive=(x)=> patch(x.id,{archived_at:x.archived_at?null:new Date().toISOString()});
   const setCase=async(x,v)=>{ await patch(x.id,{case_status:v});
-    if(v==="rework"){ try{ const {error}=await sbImmo.from("tasks").insert({description:`Rechnung Rework prüfen: ${x.company||"—"} · ${x.invoice_number||""} (€ ${(+x.amount||0).toLocaleString("de-DE")})`,priority:"high",flag:"rework"}); if(error)throw error; toast("Rework → To-do in IMMODAY angelegt"); }catch(e){ toast("Rework gesetzt · IMMODAY-Todo fehlgeschlagen","err"); } } };
+    if(v==="rework"){ try{ const {error}=await sbImmo.from("tasks").insert({description:`Rechnung Rework prüfen: ${x.company||"—"} · ${x.invoice_number||""} (€ ${(+x.amount||0).toLocaleString("de-DE")})`,priority:"high",flag:"help"}); if(error)throw error; toast("Rework → To-do in IMMODAY angelegt"); }catch(e){ toast("Rework gesetzt · IMMODAY-Todo fehlgeschlagen","err"); } } };
   const upload=async(x,file)=>{ if(!file)return; try{ const path=`${x.id}/${file.name.replace(/[^\w.\-]/g,"_")}`;
     const {error}=await sb.storage.from("invoices").upload(path,file,{upsert:true,contentType:file.type||"application/pdf"});
     if(error)throw error; await patch(x.id,{pdf_path:path}); toast("Beleg hochgeladen"); }catch(e){err(e);} };
