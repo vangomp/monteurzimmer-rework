@@ -30,6 +30,8 @@ const { useState, useEffect, useCallback, useMemo } = React;
 const SUPABASE_URL = "https://nwsbkujlupugktzfrwdb.supabase.co";
 const SUPABASE_KEY = "sb_publishable_UsM1ZkBCRBr5Nuiq7akc2A_W_K8bn_h";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+// IMMODAY hub (for posting rework to-dos)
+const sbImmo = window.supabase.createClient("https://xytmbhbkridbepeyhfml.supabase.co", "sb_publishable_30rTTC6kZWRG5u7466wSVw_4l9P9G4D");
 
 /* ---------- helpers ---------- */
 const TODAY = new Date(new Date().toDateString());
@@ -774,7 +776,7 @@ function SplitModal({inv,objekte,onClose,onSaved}) {
 function Accounting({bump}) {
   const [inv,reload]=useList(loaders.qonto,[bump]);
   const [objekte]=useList(loaders.objekte,[bump]);
-  const [fHouse,setFHouse]=useState(""),[fFirma,setFFirma]=useState(""),[fStatus,setFStatus]=useState(""),[fMonth,setFMonth]=useState("");
+  const [fHouse,setFHouse]=useState(""),[fFirma,setFFirma]=useState(""),[fStatus,setFStatus]=useState(""),[fMonth,setFMonth]=useState(""),[fCase,setFCase]=useState("");
   const [group,setGroup]=useState("firma");
   const [showArch,setShowArch]=useState(false);
   const [splitFor,setSplitFor]=useState(null);
@@ -793,7 +795,7 @@ function Accounting({bump}) {
   const houses=[...new Set(inv.flatMap(houseOf))].sort();
   const firms=[...new Set(inv.map(x=>x.company||"—"))].sort();
   const months=[...new Set(inv.map(x=>monthOf(x.issue_date)))].sort().reverse();
-  const f=inv.filter(x=>(showArch||!x.archived_at)&&(!fHouse||houseOf(x).includes(fHouse))&&(!fFirma||(x.company||"—")===fFirma)&&(!fStatus||life(x)===fStatus)&&(!fMonth||monthOf(x.issue_date)===fMonth));
+  const f=inv.filter(x=>(showArch||!x.archived_at)&&(!fHouse||houseOf(x).includes(fHouse))&&(!fFirma||(x.company||"—")===fFirma)&&(!fStatus||life(x)===fStatus)&&(!fMonth||monthOf(x.issue_date)===fMonth)&&(!fCase||(x.case_status||"normal")===fCase));
 
   const sum=(arr)=>arr.reduce((a,x)=>a+(+x.amount||0),0);
   const fakturiert=sum(f.filter(x=>!isCanceled(x)));
@@ -814,13 +816,17 @@ function Accounting({bump}) {
   const patch=async(id,p)=>{ const {error}=await sb.from("qonto_invoices").update({...p,updated_at:new Date().toISOString()}).eq("id",id); if(error)return err(error); reload(); };
   const togglePaid=(x)=> patch(x.id, isPaid(x)?{paid_at:null,status:"unpaid"}:{paid_at:new Date().toISOString().slice(0,10),status:"paid"});
   const toggleArchive=(x)=> patch(x.id,{archived_at:x.archived_at?null:new Date().toISOString()});
+  const setCase=async(x,v)=>{ await patch(x.id,{case_status:v});
+    if(v==="rework"){ try{ const {error}=await sbImmo.from("tasks").insert({description:`Rechnung Rework prüfen: ${x.company||"—"} · ${x.invoice_number||""} (€ ${(+x.amount||0).toLocaleString("de-DE")})`,priority:"high",flag:"rework"}); if(error)throw error; toast("Rework → To-do in IMMODAY angelegt"); }catch(e){ toast("Rework gesetzt · IMMODAY-Todo fehlgeschlagen","err"); } } };
   const upload=async(x,file)=>{ if(!file)return; try{ const path=`${x.id}/${file.name.replace(/[^\w.\-]/g,"_")}`;
     const {error}=await sb.storage.from("invoices").upload(path,file,{upsert:true,contentType:file.type||"application/pdf"});
     if(error)throw error; await patch(x.id,{pdf_path:path}); toast("Beleg hochgeladen"); }catch(e){err(e);} };
   const viewPdf=async(x)=>{ try{ const {data,error}=await sb.storage.from("invoices").createSignedUrl(x.pdf_path,3600);
     if(error)throw error; window.open(data.signedUrl,"_blank"); }catch(e){err(e);} };
   const selCls="border border-slate-300 rounded-lg px-2 py-1.5 text-xs";
-  const apprBorder=(a)=> a==="approved"?"border-l-4 border-l-emerald-400":a==="rework"?"border-l-4 border-l-amber-400":"";
+  const caseLabel={normal:"Offen (normal)",late:"Verspätet (Late)",mahnung:"Mahnung",klage:"Klage / zahlt nicht",rework:"Rework nötig"};
+  const caseBadge={late:"bg-amber-100 text-amber-700",mahnung:"bg-orange-100 text-orange-700",klage:"bg-rose-100 text-rose-700",rework:"bg-violet-100 text-violet-700"};
+  const caseBorder=(c)=> (c&&c!=="normal")?("border-l-4 "+({late:"border-l-amber-400",mahnung:"border-l-orange-500",klage:"border-l-rose-500",rework:"border-l-violet-500"}[c]||"")):"";
 
   return (
     <div className="space-y-5">
@@ -840,8 +846,9 @@ function Accounting({bump}) {
             <select value={fMonth} onChange={e=>setFMonth(e.target.value)} className={selCls}><option value="">Alle Monate</option>{months.map(m=><option key={m} value={m}>{m}</option>)}</select>
             <select value={fHouse} onChange={e=>setFHouse(e.target.value)} className={selCls}><option value="">Alle Häuser</option>{houses.map(h=><option key={h} value={h}>{h}</option>)}</select>
             <select value={fFirma} onChange={e=>setFFirma(e.target.value)} className={selCls}><option value="">Alle Firmen</option>{firms.map(c=><option key={c} value={c}>{c}</option>)}</select>
-            <select value={fStatus} onChange={e=>setFStatus(e.target.value)} className={selCls}><option value="">Alle Status</option><option value="created">Erstellt</option><option value="offen">Offen</option><option value="paid">Bezahlt</option></select>
-            {(fMonth||fHouse||fFirma||fStatus)&&<button onClick={()=>{setFMonth("");setFHouse("");setFFirma("");setFStatus("");}} className="text-xs text-blue-700 font-semibold">zurücksetzen</button>}
+            <select value={fStatus} onChange={e=>setFStatus(e.target.value)} className={selCls}><option value="">Zahlung: alle</option><option value="created">Erstellt</option><option value="offen">Offen</option><option value="paid">Bezahlt</option></select>
+            <select value={fCase} onChange={e=>setFCase(e.target.value)} className={selCls}><option value="">Fall: alle</option><option value="late">Verspätet</option><option value="mahnung">Mahnung</option><option value="klage">Klage</option><option value="rework">Rework</option></select>
+            {(fMonth||fHouse||fFirma||fStatus||fCase)&&<button onClick={()=>{setFMonth("");setFHouse("");setFFirma("");setFStatus("");setFCase("");}} className="text-xs text-blue-700 font-semibold">zurücksetzen</button>}
             <span className="text-xs font-semibold text-slate-500 ml-2">Gruppieren:</span>
             {[["firma","Firma"],["haus","Haus"],["monat","Monat"]].map(([k,l])=><button key={k} onClick={()=>setGroup(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(group===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}
             <label className="ml-2 text-xs text-slate-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showArch} onChange={e=>setShowArch(e.target.checked)} className="accent-blue-600"/> Archiv anzeigen</label>
@@ -854,23 +861,23 @@ function Accounting({bump}) {
         </table></Card>
 
         <div className="space-y-3">{f.sort((a,b)=>(b.issue_date||"").localeCompare(a.issue_date||"")).map(x=>{const[lt,lc]=lifeBadge(life(x));return(
-          <Card key={x.id} className={"p-4 "+apprBorder(x.approval)+(x.archived_at?" opacity-60":"")}>
+          <Card key={x.id} className={"p-4 "+caseBorder(x.case_status)+(x.archived_at?" opacity-60":"")}>
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="font-semibold text-slate-800">{x.company||"—"} <Pill text={lt} cls={lc}/>{x.archived_at&&<span> <Pill text="Archiviert" cls="bg-slate-200 text-slate-500"/></span>}{Array.isArray(x.house_split)&&x.house_split.length>1&&<span> <Pill text={`${x.house_split.length} Häuser`} cls="bg-indigo-100 text-indigo-700"/></span>}</div>
+                <div className="font-semibold text-slate-800">{x.company||"—"} <Pill text={lt} cls={lc}/>{x.case_status&&x.case_status!=="normal"&&<span> <Pill text={caseLabel[x.case_status]} cls={caseBadge[x.case_status]}/></span>}{x.archived_at&&<span> <Pill text="Archiviert" cls="bg-slate-200 text-slate-500"/></span>}{Array.isArray(x.house_split)&&x.house_split.length>1&&<span> <Pill text={`${x.house_split.length} Häuser`} cls="bg-indigo-100 text-indigo-700"/></span>}</div>
                 <div className="text-xs text-slate-400 mt-0.5">{x.invoice_number||""} · {x.house||"ohne Haus"} · ausgestellt {fmt(x.issue_date)} · fällig {fmt(x.due_date)}{x.paid_at?` · bezahlt ${fmt(x.paid_at)}${gapDays(x)!=null?` · ${gapDays(x)} T. bis Zahlung`:""}`:""}</div>
               </div>
               <div className="text-lg font-bold text-slate-800">{cur(x.amount)}</div>
             </div>
             <div className="flex flex-wrap items-center gap-2 mt-3">
               <select value={x.house||""} onChange={e=>patch(x.id,{house:e.target.value||null})} className={selCls}><option value="">— Haus —</option>{(objekte||[]).map(o=><option key={o.id} value={o.code}>{o.code}</option>)}</select>
-              <select value={x.approval||"pending"} onChange={e=>patch(x.id,{approval:e.target.value})} className={selCls}><option value="pending">Freigabe offen</option><option value="approved">✓ Freigegeben</option><option value="rework">⟳ Rework</option></select>
+              <select value={x.case_status||"normal"} onChange={e=>setCase(x,e.target.value)} className={selCls}><option value="normal">Offen (normal)</option><option value="late">Verspätet (Late)</option><option value="mahnung">Mahnung</option><option value="klage">Klage / zahlt nicht</option><option value="rework">Rework nötig</option></select>
               <Btn kind={isPaid(x)?"soft":"ok"} size="sm" onClick={()=>togglePaid(x)}>{isPaid(x)?"↩ als unbezahlt":"€ als bezahlt"}</Btn>
               {x.pdf_path
                 ? <button onClick={()=>viewPdf(x)} className="text-xs px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 font-semibold">📄 Beleg ansehen</button>
                 : <label className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold cursor-pointer">⬆ Beleg hochladen<input type="file" accept="application/pdf,image/*" className="hidden" onChange={e=>upload(x,e.target.files[0])}/></label>}
               <button onClick={()=>setSplitFor(x)} className={"text-xs px-2.5 py-1 rounded-lg font-semibold "+(Array.isArray(x.house_split)&&x.house_split.length>1?"bg-indigo-100 text-indigo-700":"bg-slate-100 text-slate-600")}>⇄ Häuser aufteilen</button>
-              {x.approval==="approved" && <button onClick={()=>toggleArchive(x)} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold">{x.archived_at?"↩ Wiederherstellen":"📦 Archivieren"}</button>}
+              <button onClick={()=>toggleArchive(x)} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold">{x.archived_at?"↩ Wiederherstellen":"📦 Archivieren"}</button>
             </div>
             <input defaultValue={x.comment||""} onBlur={e=>{if(e.target.value!==(x.comment||""))patch(x.id,{comment:e.target.value});}} placeholder="Kommentar…" className="w-full mt-2 border border-slate-200 rounded-lg px-3 py-1.5 text-sm"/>
           </Card>);})}
