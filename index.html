@@ -799,8 +799,9 @@ function Accounting({bump}) {
 
   const alloc=(x)=> (Array.isArray(x.house_split)&&x.house_split.length) ? x.house_split.map(s=>({house:s.house||"ohne Haus",amount:+s.amount||0})) : [{house:x.house||"ohne Haus",amount:+x.amount||0}];
   const houseOf=(x)=> alloc(x).map(a=>a.house);
+  const EXCL_HOUSES=["ANH51"];
   const houseCat=[...new Set((objekte||[]).map(o=>o.code).filter(Boolean))];
-  const houses=[...new Set([...houseCat,...inv.flatMap(houseOf)])].filter(h=>h&&h!=="ohne Haus").sort();
+  const houses=[...new Set([...houseCat,...inv.flatMap(houseOf)])].filter(h=>h&&h!=="ohne Haus"&&!EXCL_HOUSES.includes(h)).sort();
   const firms=[...new Set(inv.map(x=>x.company||"—"))].sort();
   const years=[...new Set(inv.map(x=>String(x.issue_date||"").slice(0,4)).filter(Boolean))].sort().reverse();
   const now=new Date(), curYear=now.getFullYear(), curMonth=now.getMonth()+1;
