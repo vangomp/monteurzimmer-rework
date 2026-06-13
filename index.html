@@ -833,21 +833,20 @@ function Accounting({bump}) {
   });
   const grpRows=Object.entries(grp).sort((a,b)=> group==="monat"?(a[0]<b[0]?1:-1):b[1].fakt-a[1].fakt);
 
-  // ---- chart data (respects all non-time filters; compares to same period last year) ----
-  const metricOf=(x)=> chartMetric==="bez"?(isPaid(x)?(+x.amount||0):0) : chartMetric==="off"?((!isPaid(x)&&!isCanceled(x))?(+x.amount||0):0) : (!isCanceled(x)?(+x.amount||0):0);
+  // ---- chart data (stacked: Bezahlt + Offen = Fakturiert; compares to same period last year) ----
   const keyOf=(x)=> group==="haus"?(x.house||"ohne Haus") : group==="monat"?(compare?String(monNum(x)).padStart(2,"0"):monthOf(x.issue_date)) : (x.company||"—");
-  const buildG=(off)=>{const g={};inv.forEach(x=>{if(!baseMatch(x)||!timeMatch(x,off))return;const k=keyOf(x);g[k]=(g[k]||0)+metricOf(x);});return g;};
+  const buildG=(off)=>{const g={};inv.forEach(x=>{if(!baseMatch(x)||!timeMatch(x,off))return;const k=keyOf(x);const s=g[k]=g[k]||{bez:0,off:0};if(isPaid(x))s.bez+=(+x.amount||0);else if(!isCanceled(x))s.off+=(+x.amount||0);});return g;};
   const curG=buildG(0), prevG=compare?buildG(-1):null;
+  const faktOf=(s)=>s?(s.bez+s.off):0;
   let chartKeys=[...new Set([...Object.keys(curG),...(prevG?Object.keys(prevG):[])])];
   if(group==="monat") chartKeys.sort((a,b)=>a<b?-1:1);
   else if(chartSort==="name") chartKeys.sort((a,b)=>a.localeCompare(b));
-  else chartKeys.sort((a,b)=>(curG[b]||0)-(curG[a]||0));
-  const chartMax=Math.max(1,...chartKeys.map(k=>Math.max(curG[k]||0,prevG?(prevG[k]||0):0)));
+  else chartKeys.sort((a,b)=>faktOf(curG[b])-faktOf(curG[a]));
+  const chartMax=Math.max(1,...chartKeys.map(k=>Math.max(faktOf(curG[k]),prevG?faktOf(prevG[k]):0)));
   const monLbl=["","Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
   const klabel=(k)=> (group==="monat"&&compare)?(monLbl[+k]||k):k;
   const curLabel = period==="ytd"?`${curYear} (YTD)`: compare?String(period):"Aktuell";
   const prevLabel = period==="ytd"?`${curYear-1} (Jan–${monLbl[curMonth]})`: compare?String((+period)-1):"";
-  const metricColor = chartMetric==="bez"?"bg-emerald-500":chartMetric==="off"?"bg-amber-500":"bg-blue-500";
 
   const patch=async(id,p)=>{ const {error}=await sb.from("qonto_invoices").update({...p,updated_at:new Date().toISOString()}).eq("id",id); if(error)return err(error); reload(); };
   const togglePaid=(x)=> patch(x.id, isPaid(x)?{paid_at:null,status:"unpaid"}:{paid_at:new Date().toISOString().slice(0,10),status:"paid"});
@@ -879,20 +878,21 @@ function Accounting({bump}) {
 
         <Card className="p-5">
           <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-            <h2 className="font-semibold text-slate-800">{chartMetric==="bez"?"Bezahlt":chartMetric==="off"?"Offen":"Fakturiert"} · {group==="haus"?"pro Haus":group==="monat"?"pro Monat":"pro Firma"}{compare?" · Vorjahresvergleich":""}</h2>
+            <h2 className="font-semibold text-slate-800">Fakturiert = Bezahlt + Offen · {group==="haus"?"pro Haus":group==="monat"?"pro Monat":"pro Firma"}{compare?" · Vorjahresvergleich":""}</h2>
             <div className="flex items-center gap-2 flex-wrap">
               <div className="flex gap-1">{[["firma","Firma"],["haus","Haus"],["monat","Monat"]].map(([k,l])=><button key={k} onClick={()=>setGroup(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(group===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}</div>
-              <div className="flex gap-1">{[["fakt","Fakt."],["bez","Bezahlt"],["off","Offen"]].map(([k,l])=><button key={k} onClick={()=>setChartMetric(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(chartMetric===k?"bg-slate-800 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}</div>
               {group!=="monat"&&<div className="flex gap-1">{[["val","↕ Betrag"],["name","A–Z"]].map(([k,l])=><button key={k} onClick={()=>setChartSort(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(chartSort===k?"bg-slate-800 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}</div>}
             </div>
           </div>
-          {compare&&<div className="flex items-center gap-4 text-xs text-slate-500 mb-2"><span className="flex items-center gap-1"><span className={"inline-block w-3 h-3 rounded-sm "+metricColor}></span>{curLabel}</span><span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-slate-300"></span>{prevLabel}</span></div>}
-          <div className="flex items-end gap-2 h-56 overflow-x-auto pb-1">{chartKeys.map(k=>{const v=curG[k]||0;const pv=prevG?(prevG[k]||0):0;return(
-            <div key={k} className="flex-1 min-w-[54px] flex flex-col items-center justify-end h-full" title={`${klabel(k)} · ${curLabel}: ${cur(v)}`+(compare?` · ${prevLabel}: ${cur(pv)}`:"")}>
-              <div className="text-[10px] font-semibold text-slate-700 whitespace-nowrap">{v?cur(v):""}</div>
+          <div className="flex items-center gap-4 text-xs text-slate-500 mb-2"><span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-emerald-500"></span>Bezahlt</span><span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-amber-400"></span>Offen</span>{compare&&<span className="text-slate-400">· hellere Säule = {prevLabel}</span>}</div>
+          <div className="flex items-end gap-2 h-56 overflow-x-auto pb-1">{chartKeys.map(k=>{const s=curG[k]||{bez:0,off:0};const fk=faktOf(s);const ps=prevG?(prevG[k]||{bez:0,off:0}):null;const pfk=ps?faktOf(ps):0;
+            const stack=(seg,light)=>{const t=faktOf(seg);return(<div className="w-full rounded-t-md overflow-hidden flex flex-col justify-end" style={{height:(t/chartMax*100)+"%"}}><div className={light?"bg-amber-200":"bg-amber-400"} style={{height:(t?seg.off/t*100:0)+"%"}}></div><div className={light?"bg-emerald-300":"bg-emerald-500"} style={{height:(t?seg.bez/t*100:0)+"%"}}></div></div>);};
+            return(
+            <div key={k} className="flex-1 min-w-[54px] flex flex-col items-center justify-end h-full" title={`${klabel(k)} · ${curLabel}: fakturiert ${cur(fk)} (bezahlt ${cur(s.bez)} · offen ${cur(s.off)})`+(compare?` · ${prevLabel}: ${cur(pfk)}`:"")}>
+              <div className="text-[10px] font-semibold text-slate-700 whitespace-nowrap">{fk?cur(fk):""}</div>
               <div className="w-full flex items-end justify-center gap-0.5 h-full">
-                <div className={"rounded-t-md "+metricColor+" "+(compare?"w-1/2":"w-3/4")} style={{height:(v/chartMax*100)+"%"}}></div>
-                {compare&&<div className="rounded-t-md bg-slate-300 w-1/2" style={{height:(pv/chartMax*100)+"%"}}></div>}
+                <div className={(compare?"w-1/2":"w-3/4")+" h-full flex items-end"}>{stack(s,false)}</div>
+                {compare&&<div className="w-1/2 h-full flex items-end">{stack(ps,true)}</div>}
               </div>
               <div className="text-[10px] text-slate-500 mt-1 w-full text-center truncate" title={klabel(k)}>{klabel(k)}</div>
             </div>);})}
@@ -920,7 +920,7 @@ function Accounting({bump}) {
             <select value={fFirma} onChange={e=>setFFirma(e.target.value)} className={selCls}><option value="">Alle Firmen</option>{firms.map(c=><option key={c} value={c}>{c}</option>)}</select>
             <select value={fStatus} onChange={e=>setFStatus(e.target.value)} className={selCls}><option value="">Zahlung: alle</option><option value="created">Erstellt</option><option value="offen">Offen</option><option value="paid">Bezahlt</option></select>
             <select value={fCase} onChange={e=>setFCase(e.target.value)} className={selCls}><option value="">Fall: alle</option><option value="late">Verspätet</option><option value="mahnung">Mahnung</option><option value="klage">Klage</option><option value="rework">Rework</option></select>
-            {(q||fHouse||fFirma||fStatus||fCase||period!=="all"||fMonNums.length)&&<button onClick={()=>{setQ("");setFHouse("");setFFirma("");setFStatus("");setFCase("");setPeriod("all");setFMonNums([]);}} className="text-xs text-blue-700 font-semibold">zurücksetzen</button>}
+            {(q||fHouse||fFirma||fStatus||fCase||period!=="all"||fMonNums.length>0)&&<button onClick={()=>{setQ("");setFHouse("");setFFirma("");setFStatus("");setFCase("");setPeriod("all");setFMonNums([]);}} className="text-xs text-blue-700 font-semibold">zurücksetzen</button>}
             <label className="ml-2 text-xs text-slate-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showArch} onChange={e=>setShowArch(e.target.checked)} className="accent-blue-600"/> Archiv</label>
             <label className="text-xs text-slate-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showExcl} onChange={e=>setShowExcl(e.target.checked)} className="accent-blue-600"/> Ausgeschlossene</label>
           </div>
