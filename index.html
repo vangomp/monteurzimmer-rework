@@ -780,6 +780,13 @@ function Accounting({bump}) {
   const [group,setGroup]=useState("firma");
   const [showArch,setShowArch]=useState(false);
   const [splitFor,setSplitFor]=useState(null);
+  const [q,setQ]=useState("");
+  const [open,setOpen]=useState({});
+  const [chartMetric,setChartMetric]=useState("fakt");
+  const [chartSort,setChartSort]=useState("val");
+  const [period,setPeriod]=useState("all");   // "all" | "ytd" | "2026" | ...
+  const [fMonNums,setFMonNums]=useState([]);   // [1..12] multi-select
+  const [showExcl,setShowExcl]=useState(false);
   if(!inv) return <Skeleton/>;
   const cur=(n)=>"€ "+(Math.round((+n||0)*100)/100).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
   const st=(x)=>(x.status||"").toLowerCase();
@@ -792,10 +799,23 @@ function Accounting({bump}) {
 
   const alloc=(x)=> (Array.isArray(x.house_split)&&x.house_split.length) ? x.house_split.map(s=>({house:s.house||"ohne Haus",amount:+s.amount||0})) : [{house:x.house||"ohne Haus",amount:+x.amount||0}];
   const houseOf=(x)=> alloc(x).map(a=>a.house);
-  const houses=[...new Set(inv.flatMap(houseOf))].sort();
+  const houseCat=[...new Set((objekte||[]).map(o=>o.code).filter(Boolean))];
+  const houses=[...new Set([...houseCat,...inv.flatMap(houseOf)])].filter(h=>h&&h!=="ohne Haus").sort();
   const firms=[...new Set(inv.map(x=>x.company||"—"))].sort();
-  const months=[...new Set(inv.map(x=>monthOf(x.issue_date)))].sort().reverse();
-  const f=inv.filter(x=>(showArch||!x.archived_at)&&(!fHouse||houseOf(x).includes(fHouse))&&(!fFirma||(x.company||"—")===fFirma)&&(!fStatus||life(x)===fStatus)&&(!fMonth||monthOf(x.issue_date)===fMonth)&&(!fCase||(x.case_status||"normal")===fCase));
+  const years=[...new Set(inv.map(x=>String(x.issue_date||"").slice(0,4)).filter(Boolean))].sort().reverse();
+  const now=new Date(), curYear=now.getFullYear(), curMonth=now.getMonth()+1;
+  const yearOf=(x)=>String(x.issue_date||"").slice(0,4);
+  const monNum=(x)=>+String(x.issue_date||"").slice(5,7)||0;
+  const ql=q.trim().toLowerCase();
+  const baseMatch=(x)=>(showArch||!x.archived_at)&&(showExcl||!x.excluded)&&(!fHouse||houseOf(x).includes(fHouse))&&(!fFirma||(x.company||"—")===fFirma)&&(!fStatus||life(x)===fStatus)&&(!fCase||(x.case_status||"normal")===fCase)&&(!ql||[x.company,x.invoice_number,x.house].concat(houseOf(x)).some(v=>(v||"").toLowerCase().includes(ql)));
+  const monMatch=(x)=> !fMonNums.length || fMonNums.includes(monNum(x));
+  const compare = period!=="all";
+  const timeMatch=(x,off)=>{ off=off||0;
+    if(period==="all") return off===0 && monMatch(x);
+    if(period==="ytd") return yearOf(x)===String(curYear+off) && monNum(x)<=curMonth && monMatch(x);
+    return yearOf(x)===String((+period)+off) && monMatch(x);
+  };
+  const f=inv.filter(x=>baseMatch(x)&&timeMatch(x,0));
 
   const sum=(arr)=>arr.reduce((a,x)=>a+(+x.amount||0),0);
   const fakturiert=sum(f.filter(x=>!isCanceled(x)));
@@ -813,9 +833,26 @@ function Accounting({bump}) {
   });
   const grpRows=Object.entries(grp).sort((a,b)=> group==="monat"?(a[0]<b[0]?1:-1):b[1].fakt-a[1].fakt);
 
+  // ---- chart data (respects all non-time filters; compares to same period last year) ----
+  const metricOf=(x)=> chartMetric==="bez"?(isPaid(x)?(+x.amount||0):0) : chartMetric==="off"?((!isPaid(x)&&!isCanceled(x))?(+x.amount||0):0) : (!isCanceled(x)?(+x.amount||0):0);
+  const keyOf=(x)=> group==="haus"?(x.house||"ohne Haus") : group==="monat"?(compare?String(monNum(x)).padStart(2,"0"):monthOf(x.issue_date)) : (x.company||"—");
+  const buildG=(off)=>{const g={};inv.forEach(x=>{if(!baseMatch(x)||!timeMatch(x,off))return;const k=keyOf(x);g[k]=(g[k]||0)+metricOf(x);});return g;};
+  const curG=buildG(0), prevG=compare?buildG(-1):null;
+  let chartKeys=[...new Set([...Object.keys(curG),...(prevG?Object.keys(prevG):[])])];
+  if(group==="monat") chartKeys.sort((a,b)=>a<b?-1:1);
+  else if(chartSort==="name") chartKeys.sort((a,b)=>a.localeCompare(b));
+  else chartKeys.sort((a,b)=>(curG[b]||0)-(curG[a]||0));
+  const chartMax=Math.max(1,...chartKeys.map(k=>Math.max(curG[k]||0,prevG?(prevG[k]||0):0)));
+  const monLbl=["","Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
+  const klabel=(k)=> (group==="monat"&&compare)?(monLbl[+k]||k):k;
+  const curLabel = period==="ytd"?`${curYear} (YTD)`: compare?String(period):"Aktuell";
+  const prevLabel = period==="ytd"?`${curYear-1} (Jan–${monLbl[curMonth]})`: compare?String((+period)-1):"";
+  const metricColor = chartMetric==="bez"?"bg-emerald-500":chartMetric==="off"?"bg-amber-500":"bg-blue-500";
+
   const patch=async(id,p)=>{ const {error}=await sb.from("qonto_invoices").update({...p,updated_at:new Date().toISOString()}).eq("id",id); if(error)return err(error); reload(); };
   const togglePaid=(x)=> patch(x.id, isPaid(x)?{paid_at:null,status:"unpaid"}:{paid_at:new Date().toISOString().slice(0,10),status:"paid"});
   const toggleArchive=(x)=> patch(x.id,{archived_at:x.archived_at?null:new Date().toISOString()});
+  const toggleExcl=(x)=> patch(x.id,{excluded:!x.excluded});
   const setCase=async(x,v)=>{ await patch(x.id,{case_status:v});
     if(v==="rework"){ try{ const {error}=await sbImmo.from("tasks").insert({description:`Rechnung Rework prüfen: ${x.company||"—"} · ${x.invoice_number||""} (€ ${(+x.amount||0).toLocaleString("de-DE")})`,priority:"high",flag:"help"}); if(error)throw error; toast("Rework → To-do in IMMODAY angelegt"); }catch(e){ toast("Rework gesetzt · IMMODAY-Todo fehlgeschlagen","err"); } } };
   const upload=async(x,file)=>{ if(!file)return; try{ const path=`${x.id}/${file.name.replace(/[^\w.\-]/g,"_")}`;
@@ -840,18 +877,52 @@ function Accounting({bump}) {
           <Card className="p-5"><div className="text-2xl font-bold text-rose-600">{ueberfaellig}</div><div className="text-xs text-slate-500">überfällig</div></Card>
         </div>
 
-        <Card className="p-4">
+        <Card className="p-5">
+          <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+            <h2 className="font-semibold text-slate-800">{chartMetric==="bez"?"Bezahlt":chartMetric==="off"?"Offen":"Fakturiert"} · {group==="haus"?"pro Haus":group==="monat"?"pro Monat":"pro Firma"}{compare?" · Vorjahresvergleich":""}</h2>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex gap-1">{[["firma","Firma"],["haus","Haus"],["monat","Monat"]].map(([k,l])=><button key={k} onClick={()=>setGroup(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(group===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}</div>
+              <div className="flex gap-1">{[["fakt","Fakt."],["bez","Bezahlt"],["off","Offen"]].map(([k,l])=><button key={k} onClick={()=>setChartMetric(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(chartMetric===k?"bg-slate-800 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}</div>
+              {group!=="monat"&&<div className="flex gap-1">{[["val","↕ Betrag"],["name","A–Z"]].map(([k,l])=><button key={k} onClick={()=>setChartSort(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(chartSort===k?"bg-slate-800 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}</div>}
+            </div>
+          </div>
+          {compare&&<div className="flex items-center gap-4 text-xs text-slate-500 mb-2"><span className="flex items-center gap-1"><span className={"inline-block w-3 h-3 rounded-sm "+metricColor}></span>{curLabel}</span><span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-slate-300"></span>{prevLabel}</span></div>}
+          <div className="flex items-end gap-2 h-56 overflow-x-auto pb-1">{chartKeys.map(k=>{const v=curG[k]||0;const pv=prevG?(prevG[k]||0):0;return(
+            <div key={k} className="flex-1 min-w-[54px] flex flex-col items-center justify-end h-full" title={`${klabel(k)} · ${curLabel}: ${cur(v)}`+(compare?` · ${prevLabel}: ${cur(pv)}`:"")}>
+              <div className="text-[10px] font-semibold text-slate-700 whitespace-nowrap">{v?cur(v):""}</div>
+              <div className="w-full flex items-end justify-center gap-0.5 h-full">
+                <div className={"rounded-t-md "+metricColor+" "+(compare?"w-1/2":"w-3/4")} style={{height:(v/chartMax*100)+"%"}}></div>
+                {compare&&<div className="rounded-t-md bg-slate-300 w-1/2" style={{height:(pv/chartMax*100)+"%"}}></div>}
+              </div>
+              <div className="text-[10px] text-slate-500 mt-1 w-full text-center truncate" title={klabel(k)}>{klabel(k)}</div>
+            </div>);})}
+            {!chartKeys.length&&<p className="text-sm text-slate-400 self-center">Keine Daten für diese Auswahl.</p>}
+          </div>
+        </Card>
+
+        <Card className="p-4 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 Suche Firma / Rechnungsnr. / Haus…" className="border border-slate-300 rounded-lg px-3 py-1.5 text-xs w-64"/>
+            <span className="text-xs font-semibold text-slate-500 ml-1">Zeitraum:</span>
+            <button onClick={()=>setPeriod("all")} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(period==="all"?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>Alle</button>
+            <button onClick={()=>setPeriod("ytd")} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(period==="ytd"?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>YTD</button>
+            {years.map(y=><button key={y} onClick={()=>setPeriod(y)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(period===y?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{y}</button>)}
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-xs font-semibold text-slate-500 mr-1">Monate:</span>
+            {[1,2,3,4,5,6,7,8,9,10,11,12].map(m=>{const on=fMonNums.includes(m);return(
+              <button key={m} onClick={()=>setFMonNums(on?fMonNums.filter(z=>z!==m):[...fMonNums,m])} className={"px-2 py-1 rounded-md text-xs font-semibold "+(on?"bg-indigo-600 text-white":"bg-slate-100 text-slate-500")}>{["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"][m-1]}</button>);})}
+            {fMonNums.length>0&&<button onClick={()=>setFMonNums([])} className="text-xs text-blue-700 font-semibold ml-1">Monate leeren</button>}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-semibold text-slate-500">Filter:</span>
-            <select value={fMonth} onChange={e=>setFMonth(e.target.value)} className={selCls}><option value="">Alle Monate</option>{months.map(m=><option key={m} value={m}>{m}</option>)}</select>
-            <select value={fHouse} onChange={e=>setFHouse(e.target.value)} className={selCls}><option value="">Alle Häuser</option>{houses.map(h=><option key={h} value={h}>{h}</option>)}</select>
+            <select value={fHouse} onChange={e=>setFHouse(e.target.value)} className={selCls}><option value="">Alle Häuser</option>{houses.map(h=><option key={h} value={h}>{h}</option>)}<option value="ohne Haus">ohne Haus</option></select>
             <select value={fFirma} onChange={e=>setFFirma(e.target.value)} className={selCls}><option value="">Alle Firmen</option>{firms.map(c=><option key={c} value={c}>{c}</option>)}</select>
             <select value={fStatus} onChange={e=>setFStatus(e.target.value)} className={selCls}><option value="">Zahlung: alle</option><option value="created">Erstellt</option><option value="offen">Offen</option><option value="paid">Bezahlt</option></select>
             <select value={fCase} onChange={e=>setFCase(e.target.value)} className={selCls}><option value="">Fall: alle</option><option value="late">Verspätet</option><option value="mahnung">Mahnung</option><option value="klage">Klage</option><option value="rework">Rework</option></select>
-            {(fMonth||fHouse||fFirma||fStatus||fCase)&&<button onClick={()=>{setFMonth("");setFHouse("");setFFirma("");setFStatus("");setFCase("");}} className="text-xs text-blue-700 font-semibold">zurücksetzen</button>}
-            <span className="text-xs font-semibold text-slate-500 ml-2">Gruppieren:</span>
-            {[["firma","Firma"],["haus","Haus"],["monat","Monat"]].map(([k,l])=><button key={k} onClick={()=>setGroup(k)} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(group===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>)}
-            <label className="ml-2 text-xs text-slate-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showArch} onChange={e=>setShowArch(e.target.checked)} className="accent-blue-600"/> Archiv anzeigen</label>
+            {(q||fHouse||fFirma||fStatus||fCase||period!=="all"||fMonNums.length)&&<button onClick={()=>{setQ("");setFHouse("");setFFirma("");setFStatus("");setFCase("");setPeriod("all");setFMonNums([]);}} className="text-xs text-blue-700 font-semibold">zurücksetzen</button>}
+            <label className="ml-2 text-xs text-slate-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showArch} onChange={e=>setShowArch(e.target.checked)} className="accent-blue-600"/> Archiv</label>
+            <label className="text-xs text-slate-500 flex items-center gap-1 cursor-pointer"><input type="checkbox" checked={showExcl} onChange={e=>setShowExcl(e.target.checked)} className="accent-blue-600"/> Ausgeschlossene</label>
           </div>
         </Card>
 
@@ -860,15 +931,19 @@ function Accounting({bump}) {
           <tbody>{grpRows.map(([k,o])=>(<tr key={k} className="border-t border-slate-100"><td className="p-3 font-medium text-slate-800">{k}</td><td className="p-3 text-right text-slate-600">{o.n}</td><td className="p-3 text-right text-slate-700">{cur(o.fakt)}</td><td className="p-3 text-right text-emerald-600">{cur(o.bez)}</td><td className="p-3 text-right text-amber-600">{cur(o.off)}</td></tr>))}</tbody>
         </table></Card>
 
-        <div className="space-y-3">{f.sort((a,b)=>(b.issue_date||"").localeCompare(a.issue_date||"")).map(x=>{const[lt,lc]=lifeBadge(life(x));return(
-          <Card key={x.id} className={"p-4 "+caseBorder(x.case_status)+(x.archived_at?" opacity-60":"")}>
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="font-semibold text-slate-800">{x.company||"—"} <Pill text={lt} cls={lc}/>{x.case_status&&x.case_status!=="normal"&&<span> <Pill text={caseLabel[x.case_status]} cls={caseBadge[x.case_status]}/></span>}{x.archived_at&&<span> <Pill text="Archiviert" cls="bg-slate-200 text-slate-500"/></span>}{Array.isArray(x.house_split)&&x.house_split.length>1&&<span> <Pill text={`${x.house_split.length} Häuser`} cls="bg-indigo-100 text-indigo-700"/></span>}</div>
-                <div className="text-xs text-slate-400 mt-0.5">{x.invoice_number||""} · {x.house||"ohne Haus"} · ausgestellt {fmt(x.issue_date)} · fällig {fmt(x.due_date)}{x.paid_at?` · bezahlt ${fmt(x.paid_at)}${gapDays(x)!=null?` · ${gapDays(x)} T. bis Zahlung`:""}`:""}</div>
+        <div className="space-y-3">{f.sort((a,b)=>(b.issue_date||"").localeCompare(a.issue_date||"")).map(x=>{const[lt,lc]=lifeBadge(life(x));const isOpen=!!open[x.id];return(
+          <Card key={x.id} className={"p-4 "+caseBorder(x.case_status)+((x.archived_at||x.excluded)?" opacity-60":"")}>
+            <div className="flex flex-wrap items-start justify-between gap-3 cursor-pointer" onClick={()=>setOpen(o=>({...o,[x.id]:!o[x.id]}))}>
+              <div className="flex items-start gap-2">
+                <span className={"mt-1 text-slate-400 text-xs transition-transform "+(isOpen?"rotate-90":"")}>▶</span>
+                <div>
+                  <div className="font-semibold text-slate-800">{x.company||"—"} <Pill text={lt} cls={lc}/>{x.case_status&&x.case_status!=="normal"&&<span> <Pill text={caseLabel[x.case_status]} cls={caseBadge[x.case_status]}/></span>}{x.archived_at&&<span> <Pill text="Archiviert" cls="bg-slate-200 text-slate-500"/></span>}{x.excluded&&<span> <Pill text="Ausgeschlossen" cls="bg-rose-100 text-rose-600"/></span>}{Array.isArray(x.house_split)&&x.house_split.length>1&&<span> <Pill text={`${x.house_split.length} Häuser`} cls="bg-indigo-100 text-indigo-700"/></span>}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{x.invoice_number||""} · {x.house||"ohne Haus"} · ausgestellt {fmt(x.issue_date)} · fällig {fmt(x.due_date)}{x.paid_at?` · bezahlt ${fmt(x.paid_at)}${gapDays(x)!=null?` · ${gapDays(x)} T. bis Zahlung`:""}`:""}</div>
+                </div>
               </div>
               <div className="text-lg font-bold text-slate-800">{cur(x.amount)}</div>
             </div>
+            {isOpen&&<React.Fragment>
             <div className="flex flex-wrap items-center gap-2 mt-3">
               <select value={x.house||""} onChange={e=>patch(x.id,{house:e.target.value||null})} className={selCls}><option value="">— Haus —</option>{(objekte||[]).map(o=><option key={o.id} value={o.code}>{o.code}</option>)}</select>
               <select value={x.case_status||"normal"} onChange={e=>setCase(x,e.target.value)} className={selCls}><option value="normal">Offen (normal)</option><option value="late">Verspätet (Late)</option><option value="mahnung">Mahnung</option><option value="klage">Klage / zahlt nicht</option><option value="rework">Rework nötig</option></select>
@@ -878,8 +953,10 @@ function Accounting({bump}) {
                 : <label className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold cursor-pointer">⬆ Beleg hochladen<input type="file" accept="application/pdf,image/*" className="hidden" onChange={e=>upload(x,e.target.files[0])}/></label>}
               <button onClick={()=>setSplitFor(x)} className={"text-xs px-2.5 py-1 rounded-lg font-semibold "+(Array.isArray(x.house_split)&&x.house_split.length>1?"bg-indigo-100 text-indigo-700":"bg-slate-100 text-slate-600")}>⇄ Häuser aufteilen</button>
               <button onClick={()=>toggleArchive(x)} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold">{x.archived_at?"↩ Wiederherstellen":"📦 Archivieren"}</button>
+              <button onClick={()=>toggleExcl(x)} className={"text-xs px-2.5 py-1 rounded-lg font-semibold "+(x.excluded?"bg-emerald-100 text-emerald-700":"bg-rose-100 text-rose-600")}>{x.excluded?"↩ Wieder einschließen":"🚫 Ausschließen"}</button>
             </div>
             <input defaultValue={x.comment||""} onBlur={e=>{if(e.target.value!==(x.comment||""))patch(x.id,{comment:e.target.value});}} placeholder="Kommentar…" className="w-full mt-2 border border-slate-200 rounded-lg px-3 py-1.5 text-sm"/>
+            </React.Fragment>}
           </Card>);})}
           {!f.length&&<Empty>Keine Rechnungen für diese Filter.</Empty>}
         </div>
