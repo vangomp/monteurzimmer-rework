@@ -128,9 +128,9 @@ function useList(loader, deps=[]) {
 }
 const loaders = {
   rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number").then(r=>r.data||[]),
-  roomsMin: ()=> sb.from("rooms").select("id,room_number").order("room_number").then(r=>r.data||[]),
+  roomsMin: ()=> sb.from("rooms").select("id,room_number,capacity").order("room_number").then(r=>r.data||[]),
   objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
-  reservations: ()=> sb.from("reservations").select("*, rooms(room_number, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
+  reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
   checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
@@ -183,6 +183,8 @@ function Cockpit({go,bump}) {
   const openIssues=issues.filter(i=>i.status!=="done");
   if(openIssues.length) todo.push(["📨",`${openIssues.length} neue Problem-Meldung(en)`,"Meldungen",()=>go("msg"),"blue"]);
   lowBat.forEach(n=>todo.push(["🔋",`Nuki-Akku niedrig: ${n.lock_name} (${n.battery_charge}%)`,"Reinigung",()=>go("clean"),"rose"]));
+  const doorBatDue=rooms.filter(r=>{const d=r.door_battery_changed_at;return d && (Date.now()-new Date(d))/86400000>180;});
+  if(doorBatDue.length) todo.push(["🔋",`${doorBatDue.length} Zimmer: Türschloss-Akku fällig (>6 Mon.)`,"Zimmer",()=>go("rooms"),"amber"]);
   if(!todo.length) todo.push(["✅","Nichts Dringendes – alles im grünen Bereich.","",null,"emerald"]);
   const toneCls={amber:"border-amber-300 bg-amber-50",rose:"border-rose-300 bg-rose-50",blue:"border-blue-300 bg-blue-50",emerald:"border-emerald-300 bg-emerald-50"};
   return (
@@ -248,7 +250,8 @@ function Reservations({bump}) {
   const Th=({k,children})=>{const on=sort.key===k;return <th onClick={()=>setSort(s=>({key:k,dir:on&&s.dir==="asc"?"desc":"asc"}))} className="text-left p-3 cursor-pointer select-none hover:text-slate-700 whitespace-nowrap">{children}{on?(sort.dir==="asc"?" ▲":" ▼"):""}</th>;};
   const save=async(form)=>{ try{
     const payload={ guest_name:form.guest_name, guest_email:form.guest_email||null, room_id:form.room_id||null,
-      check_in_date:form.check_in_date, check_out_date:form.check_out_date, contact_channel:form.contact_channel||null, preferred_language:form.preferred_language||"de" };
+      check_in_date:form.check_in_date, check_out_date:form.check_out_date, contact_channel:form.contact_channel||null, preferred_language:form.preferred_language||"de",
+      persons:form.persons?Number(form.persons):null, status:form.status||"confirmed" };
     if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt"); }
     else { const {error}=await sb.from("reservations").update(payload).eq("id",edit.id); if(error) throw error; toast("Gespeichert"); }
     setEdit(null); reload(); }catch(e){ err(e); } };
@@ -261,6 +264,7 @@ function Reservations({bump}) {
     if(archiving && r.room_id) await sb.from("rooms").update({status:"available"}).eq("id",r.room_id);
     toast(archiving?"Archiviert · Zimmer freigegeben":"Wiederhergestellt"); reload(); };
   const toggleQonto=async(r)=>{ const {error}=await sb.from("reservations").update({qonto_billed:!r.qonto_billed}).eq("id",r.id); if(error)return err(error); reload(); };
+  const confirmRes=async(r)=>{ const {error}=await sb.from("reservations").update({status:"confirmed"}).eq("id",r.id); if(error)return err(error); toast("Reservierung bestätigt"); reload(); };
   return (
     <div className="space-y-4">
       <PageHead title="Reservierungen" sub={`${rows.length} gesamt · live`} right={<Btn onClick={()=>setEdit("new")} size="lg">+ Neue Reservierung</Btn>}/>
@@ -276,14 +280,15 @@ function Reservations({bump}) {
             <Th k="out">Aufenthalt</Th><Th k="channel">Kanal</Th><th className="text-center p-3">Qonto</th><th className="text-right p-3">Aktionen</th>
           </tr></thead>
           <tbody>{sorted.map(r=>{const[bt,bc]=stayBadge(stayOf(r));const dl=daysFromToday(r.check_out_date);return(
-            <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
-              <td className="p-3"><div className="font-semibold text-slate-800">{r.guest_name||"—"}</div><div className="text-xs text-slate-400">{r.code} · {r.guest_email||"—"}</div></td>
-              <td className="p-3 text-slate-600">{roomShort(r.rooms?.room_number)}</td>
+            <tr key={r.id} className={"border-t border-slate-100 hover:bg-slate-50"+(r.status==="provisional"?" bg-amber-50":"")}>
+              <td className="p-3"><div className="font-semibold text-slate-800">{r.guest_name||"—"}{r.status==="provisional"&&<span className="ml-1"><Pill text="Vorläufig" cls="bg-amber-100 text-amber-700"/></span>}</div><div className="text-xs text-slate-400">{r.code} · {r.guest_email||"—"}</div></td>
+              <td className="p-3 text-slate-600">{roomShort(r.rooms?.room_number)}{r.persons?<span className={"ml-1 text-xs font-medium "+(r.rooms?.capacity&&r.persons>=r.rooms.capacity?"text-emerald-600":"text-amber-600")}>· {r.persons}{r.rooms?.capacity?`/${r.rooms.capacity}`:""}P</span>:null}</td>
               <td className="p-3 text-slate-600 whitespace-nowrap">{fmtShort(r.check_in_date)} – {fmtShort(r.check_out_date)}</td>
               <td className="p-3"><Pill text={bt+(!r.archived_at&&dl>=0&&dl<=14?` · ${dl}d`:"")} cls={bc}/></td>
               <td className="p-3 text-slate-600">{r.contact_channel||"—"}</td>
               <td className="p-3 text-center"><input type="checkbox" checked={!!r.qonto_billed} onChange={()=>toggleQonto(r)} className="w-4 h-4 accent-blue-600" title="Rechnung in Qonto erstellt"/></td>
               <td className="p-3 text-right whitespace-nowrap">
+                {r.status==="provisional"&&<IconBtn title="Fest bestätigen" color="text-emerald-600" onClick={()=>confirmRes(r)}>✓</IconBtn>}
                 <IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn>
                 <IconBtn title={r.archived_at?"Wiederherstellen":"Archivieren"} color="text-amber-600" onClick={()=>archive(r)}>{r.archived_at?"↩️":"📦"}</IconBtn>
                 <IconBtn title="Löschen" color="text-rose-600" onClick={()=>del(r)}>🗑</IconBtn>
@@ -300,14 +305,22 @@ function Reservations({bump}) {
 }
 function ResForm({rec,rooms,onSave,onClose}) {
   const [f,setF]=useState({ guest_name:rec?.guest_name||"", guest_email:rec?.guest_email||"", room_id:rec?.room_id||"",
-    check_in_date:rec?.check_in_date||"", check_out_date:rec?.check_out_date||"", contact_channel:rec?.contact_channel||"", preferred_language:rec?.preferred_language||"de" });
+    check_in_date:rec?.check_in_date||"", check_out_date:rec?.check_out_date||"", contact_channel:rec?.contact_channel||"", preferred_language:rec?.preferred_language||"de",
+    persons:rec?.persons??"", status:rec?.status||"confirmed" });
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
+  const selRoom=rooms.find(r=>String(r.id)===String(f.room_id));
+  const cap=selRoom?.capacity||null;
+  const pers=Number(f.persons)||0;
   return (
     <Modal title={rec?`Reservierung ${rec.code}`:"Neue Reservierung"} onClose={onClose}>
       <Field label="Gast / Firma"><input className={inputCls} value={f.guest_name} onChange={e=>u("guest_name",e.target.value)}/></Field>
       <Field label="E-Mail"><input className={inputCls} value={f.guest_email} onChange={e=>u("guest_email",e.target.value)}/></Field>
-      <Field label="Zimmer"><select className={inputCls} value={f.room_id} onChange={e=>u("room_id",e.target.value)}>
-        <option value="">— Zimmer wählen —</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.room_number}</option>)}</select></Field>
+      <Field label="Zimmer"><select className={inputCls} value={f.room_id} onChange={e=>{const v=e.target.value;setF(s=>{const rm=rooms.find(x=>String(x.id)===String(v));return {...s,room_id:v,persons:s.persons||(rm?.capacity||"")};});}}>
+        <option value="">— Zimmer wählen —</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.room_number}{r.capacity?` (max ${r.capacity}P)`:""}</option>)}</select></Field>
+      <Field label="Belegung (Personen)">
+        <input type="number" min="1" max={cap||undefined} className={inputCls} value={f.persons} onChange={e=>u("persons",e.target.value)} placeholder={cap?`max ${cap}`:"Anzahl Personen"}/>
+        {cap?<p className={"text-xs mt-1 font-medium "+(pers>=cap?"text-emerald-600":pers>0?"text-amber-600":"text-slate-400")}>{pers?`${pers} von ${cap} Plätzen · ${pers>=cap?"voll belegt":"teilweise belegt"}`:`Zimmer für max. ${cap} Personen`}</p>:null}
+      </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Check-in"><input type="date" className={inputCls} value={f.check_in_date} onChange={e=>u("check_in_date",e.target.value)}/></Field>
         <Field label="Check-out"><input type="date" className={inputCls} value={f.check_out_date} onChange={e=>u("check_out_date",e.target.value)}/></Field>
@@ -318,6 +331,10 @@ function ResForm({rec,rooms,onSave,onClose}) {
         <Field label="Sprache"><select className={inputCls} value={f.preferred_language} onChange={e=>u("preferred_language",e.target.value)}>
           <option value="de">DE</option><option value="en">EN</option><option value="cs">CS</option><option value="sk">SK</option><option value="ru">RU</option></select></Field>
       </div>
+      <label className="flex items-center gap-2 text-sm text-slate-600 mt-1 cursor-pointer">
+        <input type="checkbox" checked={f.status==="provisional"} onChange={e=>u("status",e.target.checked?"provisional":"confirmed")} className="w-4 h-4 accent-amber-500"/>
+        Vorläufige Reservierung (Anfrage – hält den Platz, noch nicht fest gebucht)
+      </label>
       <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
         <Btn kind="ok" onClick={()=>{ if(!f.guest_name||!f.check_in_date||!f.check_out_date) return toast("Name + Daten nötig","err"); onSave(f); }}>Speichern</Btn></div>
     </Modal>
@@ -335,9 +352,12 @@ function Rooms({bump}) {
   const occupant=(id)=>{ const l=resByRoom[id]; if(!l||!l.length) return null;
     return l.find(r=>daysFromToday(r.check_in_date)<=0&&daysFromToday(r.check_out_date)>=0) || l.slice().sort((a,b)=>new Date(b.check_out_date)-new Date(a.check_out_date))[0]; };
   const setStatus=async(r,status)=>{ const {error}=await sb.from("rooms").update({status}).eq("id",r.id); if(error)return err(error); toast("Status aktualisiert"); reload(); };
+  const batteryChanged=async(r)=>{ if(!confirm(`Türschloss-Akku von ${r.room_number} heute gewechselt?`))return; const {error}=await sb.from("rooms").update({door_battery_changed_at:new Date().toISOString().slice(0,10)}).eq("id",r.id); if(error)return err(error); toast("Türakku-Wechsel notiert"); reload(); };
+  const batAge=(d)=> d?Math.floor((Date.now()-new Date(d))/86400000):null;
   const save=async(f)=>{ try{
     const p={room_number:f.room_number,objekt_id:f.objekt_id||null,capacity:Number(f.capacity)||1,status:f.status,
-      door_code:f.door_code||null,house_door_code:f.house_door_code||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null};
+      door_code:f.door_code||null,house_door_code:f.house_door_code||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,
+      photos:f.photos||[],intro_video_url:f.intro_video_url||null,door_battery_changed_at:f.door_battery_changed_at||null};
     if(edit==="new"){ const {error}=await sb.from("rooms").insert(p); if(error)throw error; toast("Zimmer angelegt"); }
     else { const {error}=await sb.from("rooms").update(p).eq("id",edit.id); if(error)throw error; toast("Gespeichert"); }
     setEdit(null); reload(); }catch(e){err(e);} };
@@ -358,9 +378,10 @@ function Rooms({bump}) {
                 <td className="p-3 text-slate-500 text-xs">👤 {r.capacity}</td>
                 <td className="p-3 font-mono text-amber-700 text-xs">{r.door_code||"—"}</td>
                 <td className="p-3 text-slate-500 text-xs">📶 {r.wifi_ssid||"—"}</td>
+                <td className="p-3 text-xs">{(()=>{const a=batAge(r.door_battery_changed_at);const od=a!=null&&a>180;return r.door_battery_changed_at?<span className={od?"text-rose-600 font-semibold":"text-slate-500"} title="Türschloss-Akku zuletzt gewechselt">🔋 {fmtShort(r.door_battery_changed_at)}{od?" · fällig":""}</span>:<span className="text-slate-300" title="Kein Türakku-Wechsel notiert">🔋 —</span>;})()}{Array.isArray(r.photos)&&r.photos.length?<span className="ml-2 text-slate-400" title="Fotos">📷 {r.photos.length}</span>:null}</td>
                 <td className="p-3"><select value={r.status} onChange={e=>setStatus(r,e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1 text-xs">
                   <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></td>
-                <td className="p-3 text-right whitespace-nowrap"><IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn><IconBtn title="Löschen" color="text-rose-600" onClick={()=>del(r)}>🗑</IconBtn></td>
+                <td className="p-3 text-right whitespace-nowrap"><IconBtn title="Türakku heute gewechselt" color="text-emerald-600" onClick={()=>batteryChanged(r)}>🔋</IconBtn><IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn><IconBtn title="Löschen" color="text-rose-600" onClick={()=>del(r)}>🗑</IconBtn></td>
               </tr>);})}</tbody>
           </table>
         </Card>))}
@@ -370,8 +391,15 @@ function Rooms({bump}) {
 }
 function RoomForm({rec,objekte,onSave,onClose}) {
   const [f,setF]=useState({ room_number:rec?.room_number||"", objekt_id:rec?.objekt_id||"", capacity:rec?.capacity||1, status:rec?.status||"available",
-    door_code:rec?.door_code||"", house_door_code:rec?.house_door_code||"", wifi_ssid:rec?.wifi_ssid||"", wifi_password:rec?.wifi_password||"" });
+    door_code:rec?.door_code||"", house_door_code:rec?.house_door_code||"", wifi_ssid:rec?.wifi_ssid||"", wifi_password:rec?.wifi_password||"",
+    photos:Array.isArray(rec?.photos)?rec.photos:[], intro_video_url:rec?.intro_video_url||"", door_battery_changed_at:rec?.door_battery_changed_at||"" });
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
+  const [busy,setBusy]=useState(false);
+  const uploadPhotos=async(files)=>{ if(!files||!files.length)return; setBusy(true); try{
+    for(const file of files){ const path=`${rec?.id||"new"}/${Date.now()}-${file.name.replace(/[^\w.\-]/g,"_")}`;
+      const {error}=await sb.storage.from("room-media").upload(path,file,{upsert:true,contentType:file.type||"image/jpeg"});
+      if(error){err(error);continue;} const {data}=sb.storage.from("room-media").getPublicUrl(path);
+      setF(s=>({...s,photos:[...(s.photos||[]),data.publicUrl]})); } }finally{ setBusy(false); } };
   return (
     <Modal title={rec?`Zimmer ${rec.room_number}`:"Neues Zimmer"} onClose={onClose}>
       <Field label="Zimmer-Bezeichnung"><input className={inputCls} value={f.room_number} onChange={e=>u("room_number",e.target.value)}/></Field>
@@ -390,6 +418,21 @@ function RoomForm({rec,objekte,onSave,onClose}) {
       </div>
       <Field label="Status"><select className={inputCls} value={f.status} onChange={e=>u("status",e.target.value)}>
         <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></Field>
+      <Field label="Check-in / Lage-Video (Link, z. B. YouTube)"><input className={inputCls} value={f.intro_video_url} onChange={e=>u("intro_video_url",e.target.value)} placeholder="https://… – wie checkt man ein / wo ist das Zimmer"/></Field>
+      <Field label="Fotos (Zimmer)">
+        <div className="flex flex-wrap gap-2 mb-2">{(f.photos||[]).map((url,i)=>(
+          <div key={i} className="relative w-20 h-20 rounded-lg overflow-hidden border border-slate-200">
+            <img src={url} alt="" className="w-full h-full object-cover"/>
+            <button type="button" onClick={()=>setF(s=>({...s,photos:s.photos.filter((_,j)=>j!==i)}))} className="absolute top-0 right-0 bg-rose-600 text-white text-xs w-5 h-5 leading-5 text-center">×</button>
+          </div>))}</div>
+        <label className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold cursor-pointer inline-block">{busy?"lädt…":"⬆ Fotos hinzufügen"}<input type="file" accept="image/*" multiple className="hidden" onChange={e=>uploadPhotos(e.target.files)}/></label>
+      </Field>
+      <Field label="Türschloss-Akku zuletzt gewechselt (nicht Nuki)">
+        <div className="flex items-center gap-2">
+          <input type="date" className={inputCls} value={f.door_battery_changed_at||""} onChange={e=>u("door_battery_changed_at",e.target.value)}/>
+          <button type="button" onClick={()=>u("door_battery_changed_at",new Date().toISOString().slice(0,10))} className="text-xs px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-600 font-semibold whitespace-nowrap">Heute</button>
+        </div>
+      </Field>
       <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn><Btn kind="ok" onClick={()=>{if(!f.room_number)return toast("Bezeichnung nötig","err");onSave(f);}}>Speichern</Btn></div>
     </Modal>
   );
@@ -668,7 +711,7 @@ function Guest({onAdmin}) {
   const [issue,setIssue]=useState({category:"",message:""}); const [issueSent,setIssueSent]=useState(false);
   useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
   const lookup=async()=>{ if(!code.trim())return; setBusy(true);
-    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link)").eq("code",code.trim().toUpperCase()).maybeSingle();
+    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link,photos,intro_video_url)").eq("code",code.trim().toUpperCase()).maybeSingle();
     setBusy(false); if(error||!data){ toast("Code nicht gefunden","err"); return; } setBooking(data); setGlang(data.preferred_language||"de"); };
   const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
     if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
@@ -710,10 +753,18 @@ function Guest({onAdmin}) {
         </div>
         {room.whatsapp_url&&<a href={room.whatsapp_url} target="_blank" rel="noreferrer" className="block text-center mt-3 bg-emerald-600 text-white rounded-xl py-2.5 text-sm font-semibold">💬 WhatsApp-Gruppe öffnen</a>}
       </Card>
+      {Array.isArray(room.photos)&&room.photos.length>0&&<Card className="p-5">
+        <h3 className="font-semibold text-slate-800 mb-2">📷 Dein Zimmer</h3>
+        <div className="flex gap-2 overflow-x-auto pb-1">{room.photos.map((url,i)=>(
+          <a key={i} href={url} target="_blank" rel="noreferrer" className="shrink-0"><img src={url} alt="" className="h-40 rounded-xl object-cover"/></a>))}</div>
+      </Card>}
       <Card className="p-5">
         <h3 className="font-semibold text-slate-800 mb-2">🎬 Anleitung: Wo finde ich was?</h3>
-        {room.youtube_door_link
-          ? <a href={room.youtube_door_link} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">▶ Tür- & Wegbeschreibung ansehen</a>
+        {(room.intro_video_url||room.youtube_door_link)
+          ? <div className="space-y-2">
+              {room.intro_video_url&&<a href={room.intro_video_url} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">▶ Check-in & Lage des Zimmers</a>}
+              {room.youtube_door_link&&<a href={room.youtube_door_link} target="_blank" rel="noreferrer" className="block text-center bg-slate-700 text-white rounded-xl py-3 text-sm font-semibold">▶ Tür- & Wegbeschreibung</a>}
+            </div>
           : <p className="text-sm text-slate-400">Video folgt.</p>}
         <p className="text-xs text-slate-400 mt-3">📲 Tipp: Über das Browser-Menü „Zum Home-Bildschirm hinzufügen" hast du die Check-In-App immer griffbereit.</p>
       </Card>
