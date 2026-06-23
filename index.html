@@ -844,7 +844,7 @@ const TR = {
     photosT:"📷 Dein Zimmer", extendT:"Aufenthalt verlängern?", extendNow:"Auszug aktuell:", extendBtn:"+ Verlängerung anfragen",
     problemT:"🛠 Problem melden", cat:"Kategorie wählen…", problemPh:"Was ist das Problem?", send:"Senden",
     problemOk:"✓ Danke! Deine Meldung ist eingegangen.", more:"Weitere melden", problemNeed:"Bitte Problem beschreiben.",
-    msgTitle:"Nachrichten & Hilfe", msgEmpty:"Noch keine Nachrichten – schreib uns hier.", msgPlaceholder:"Nachricht ans Team…", msgSend:"Senden", attach:"Anhang",
+    msgTitle:"Nachrichten & Hilfe", msgEmpty:"Noch keine Nachrichten – schreib uns hier.", msgPlaceholder:"Nachricht ans Team…", msgSend:"Senden", attach:"Anhang", houseChatTitle:"Haus-Chat", houseChatEmpty:"Noch keine Nachrichten im Haus – schreib etwas.", houseChatPh:"Nachricht an Haus & Team…",
     coTitle:"Checkout-Video", coSub:"Lade dein Auszugs-Video hoch \u2013 20 \u20ac zur\u00fcck, wenn alles sauber ist.", coShow:"Das muss im Video zu sehen sein:", coUpload:"\ud83c\udfa5 Video aufnehmen / hochladen", coUploading:"l\u00e4dt\u2026", coThanks:"\u2705 Danke! Dein Video ist eingegangen \u2013 wird gepr\u00fcft, bei sauberem Zustand 20 \u20ac zur\u00fcck.", coBadToken:"Link ung\u00fcltig oder abgelaufen." },
   en:{ appTitle:"Worker Check-In", appSub:"Access to your room", code:"Reservation code", codePh:"e.g. MD38K2",
     cont:"Continue", back:"Back", admin:"Admin login", otherCode:"← different code", step:"Step", of:"of",
@@ -871,7 +871,7 @@ const TR = {
     photosT:"📷 Your room", extendT:"Extend your stay?", extendNow:"Current checkout:", extendBtn:"+ Request extension",
     problemT:"🛠 Report a problem", cat:"Choose category…", problemPh:"What is the problem?", send:"Send",
     problemOk:"✓ Thanks! Your report was received.", more:"Report another", problemNeed:"Please describe the problem.",
-    msgTitle:"Messages & help", msgEmpty:"No messages yet – write to us here.", msgPlaceholder:"Message to the team…", msgSend:"Send", attach:"Attachment",
+    msgTitle:"Messages & help", msgEmpty:"No messages yet – write to us here.", msgPlaceholder:"Message to the team…", msgSend:"Send", attach:"Attachment", houseChatTitle:"House chat", houseChatEmpty:"No messages yet – post something.", houseChatPh:"Message to house & team…",
     coTitle:"Checkout video", coSub:"Upload your move-out video \u2013 \u20ac20 back if everything is clean.", coShow:"This must be visible in the video:", coUpload:"\ud83c\udfa5 Record / upload video", coUploading:"uploading\u2026", coThanks:"\u2705 Thanks! Your video was received \u2013 it will be reviewed; \u20ac20 back if clean.", coBadToken:"Link invalid or expired." },
   cs:{ appTitle:"Check-In pro ubytované", appSub:"Přístup do vašeho pokoje", code:"Rezervační kód", codePh:"např. MD38K2",
     cont:"Pokračovat", back:"Zpět", admin:"Přihlášení admin", otherCode:"← jiný kód", step:"Krok", of:"z",
@@ -973,13 +973,14 @@ function Guest({onAdmin}){
   const [vidConsent,setVidConsent]=useState(true);
   const [issue,setIssue]=useState({category:"",message:""}); const [issueSent,setIssueSent]=useState(false);
   const [thr,setThr]=useState({on:false,company:null,thread:null,msgs:[],body:"",pendingPhoto:null,busy:false,loaded:false});
+  const [hthr,setHthr]=useState({on:false,house:null,thread:null,msgs:[],body:"",pendingPhoto:null,busy:false,loaded:false});
   const t=(k)=> (TR[glang]&&TR[glang][k]) || TR.en[k] || k;
 
   useEffect(()=>{ sb.from("settings").select("key,value").in("key",["house_rules","platform_url"]).then(({data})=>{
     (data||[]).forEach(row=>{ if(row.key==="house_rules"&&Array.isArray(row.value)) setHr(row.value);
       if(row.key==="platform_url") setPlatUrl(typeof row.value==="string"?row.value:(row.value&&row.value.url)||""); }); }); },[]);
   useEffect(()=>{ if(urlCode){ lookup(urlCode); } /* prefill from e-mail link */ },[]); // eslint-disable-line
-  useEffect(()=>{ if(step==="success"&&booking){ loadThread(); } },[step, booking&&booking.id]); // eslint-disable-line
+  useEffect(()=>{ if(step==="success"&&booking){ loadThread(); loadHouseThread(); } },[step, booking&&booking.id]); // eslint-disable-line
 
   async function lookup(forced){ const c=(forced||code||"").trim().toUpperCase(); if(!c){ return; } setBusy(true);
     // anon-Tabellen sind dicht → Lookup über SECURITY DEFINER RPC (Jean), nach Reservierungscode gescoped
@@ -1066,6 +1067,26 @@ function Guest({onAdmin}){
       if(error) throw error;
       setThr(s=>({...s,body:"",pendingPhoto:null,busy:false})); loadThread();
     }catch(e){ err(e); setThr(s=>({...s,busy:false})); }
+  }
+  // ---- Haus-Kanal (fail-soft; RPCs get_house_channel / post_house_message) ----
+  async function loadHouseThread(){
+    try{ const {data,error}=await sb.rpc("get_house_channel",{p_code:booking.code});
+      if(error||!data){ setHthr(s=>({...s,on:false,loaded:true})); return; }
+      const r=Array.isArray(data)?(data[0]||{}):data; const house=r.house||null;
+      if(!house){ setHthr(s=>({...s,on:false,loaded:true})); return; }
+      setHthr(s=>({...s,on:true,house,thread:r.thread||null,msgs:Array.isArray(r.messages)?r.messages:[],loaded:true}));
+    }catch(e){ setHthr(s=>({...s,on:false,loaded:true})); }
+  }
+  async function attachHousePhoto(file){ if(!file) return; setHthr(s=>({...s,busy:true}));
+    const ext=((file.name||"").split(".").pop()||"jpg").toLowerCase(); const path=`${booking.id}/house-${Date.now()}.${ext}`;
+    const {error}=await sb.storage.from("guest-uploads").upload(path,file,{upsert:true,contentType:file.type||"image/jpeg"});
+    if(error){ err(error); setHthr(s=>({...s,busy:false})); return; }
+    setHthr(s=>({...s,pendingPhoto:path,busy:false})); toast(t("attach")+" ✓");
+  }
+  async function sendHouseMsg(){ if((!hthr.body.trim()&&!hthr.pendingPhoto)) return; setHthr(s=>({...s,busy:true}));
+    try{ const {error}=await sb.rpc("post_house_message",{p_code:booking.code, p_body:hthr.body||"", p_attachment:hthr.pendingPhoto||null});
+      if(error) throw error; setHthr(s=>({...s,body:"",pendingPhoto:null,busy:false})); loadHouseThread();
+    }catch(e){ err(e); setHthr(s=>({...s,busy:false})); }
   }
   /* ---------------- STEP: CODE ---------------- */
   if(step==="code"){ return (
@@ -1241,6 +1262,24 @@ function Guest({onAdmin}){
           <button onClick={sendMsg} disabled={thr.busy} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold">{thr.busy?"…":t("msgSend")}</button>
         </div>
       </Card>}
+      {hthr.on&&<Card className="p-5">
+        <div className="flex items-center gap-2 mb-2"><h3 className="font-semibold text-slate-800 leading-tight">🏠 {t("houseChatTitle")}</h3>{hthr.house&&<p className="text-xs text-slate-400 truncate">{hthr.house.code||hthr.house.name}</p>}</div>
+        <div className="space-y-2 max-h-72 overflow-y-auto mb-3">
+          {hthr.msgs.length===0&&<p className="text-sm text-slate-400">{t("houseChatEmpty")}</p>}
+          {hthr.msgs.map(m=>(
+            <div key={m.id} className={"max-w-[85%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-slate-100 text-slate-700":"bg-emerald-600 text-white ml-auto")}>
+              {m.sender!=="team"&&m.author&&<div className="text-[10px] opacity-80 mb-0.5">{m.author}</div>}
+              {m.type&&m.type!=="chat"&&<div className="text-[10px] uppercase opacity-70 mb-0.5">{m.type}</div>}
+              {m.body}{m.attachment_path&&<div className="text-[11px] opacity-80 mt-1">📎 {t("attach")}</div>}
+            </div>))}
+        </div>
+        {hthr.pendingPhoto&&<div className="text-xs text-emerald-600 mb-1">📎 {t("attach")} ✓</div>}
+        <div className="flex gap-2">
+          <label className="cursor-pointer px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-semibold">📎<input type="file" accept="image/*" className="hidden" onChange={e=>attachHousePhoto(e.target.files[0])}/></label>
+          <input className={inputCls+" flex-1 !mt-0"} value={hthr.body} onChange={e=>setHthr(s=>({...s,body:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&sendHouseMsg()} placeholder={t("houseChatPh")}/>
+          <button onClick={sendHouseMsg} disabled={hthr.busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">{hthr.busy?"…":t("msgSend")}</button>
+        </div>
+      </Card>}
       {Array.isArray(room.photos)&&room.photos.length>0&&<Card className="p-5">
         <h3 className="font-semibold text-slate-800 mb-2">{t("photosT")}</h3>
         <div className="flex gap-2 overflow-x-auto pb-1">{room.photos.map((url,i)=>(
@@ -1331,33 +1370,42 @@ function BroadcastModal({objekte,onClose,onSent}){
   </Modal>);
 }
 function Postfach({bump}){
-  const [threads,setThreads]=useState(null),[sel,setSel]=useState(null),[msgs,setMsgs]=useState([]),[reply,setReply]=useState(""),[busy,setBusy]=useState(false),[off,setOff]=useState(false);
+  const [mode,setMode]=useState("company");
+  const [threads,setThreads]=useState(null),[sel,setSel]=useState(null),[msgs,setMsgs]=useState([]),[reply,setReply]=useState(""),[busy,setBusy]=useState(false),[off,setOff]=useState(false),[housePending,setHousePending]=useState(false);
   const [objekte]=useList(loaders.objekte,[bump]); const [showBc,setShowBc]=useState(false);
-  useEffect(()=>{ load(); },[bump]); // eslint-disable-line
-  async function load(){ const {data,error}=await sb.from("company_threads").select("*, companies(name,display_name,accent_color,logo_url)").order("last_message_at",{ascending:false});
+  useEffect(()=>{ setSel(null); setMsgs([]); load(); },[bump,mode]); // eslint-disable-line
+  const isH=mode==="house";
+  const toggle=()=>(<div className="flex gap-1"><button onClick={()=>setMode("company")} className={"px-3 py-1.5 rounded-lg text-xs font-semibold "+(!isH?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>Firmen</button><button onClick={()=>setMode("house")} className={"px-3 py-1.5 rounded-lg text-xs font-semibold "+(isH?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>Häuser</button></div>);
+  const label=(th)=> isH ? ((th.cleaning_objekte&&(th.cleaning_objekte.code||th.cleaning_objekte.name))||"Haus") : ((th.companies&&(th.companies.display_name||th.companies.name))||"—");
+  async function load(){
+    if(isH){ const {data,error}=await sb.from("house_threads").select("*, cleaning_objekte(code,name)").order("last_message_at",{ascending:false});
+      if(error){ setHousePending(true); setThreads([]); return; } setHousePending(false); setThreads(data||[]); return; }
+    const {data,error}=await sb.from("company_threads").select("*, companies(name,display_name,accent_color,logo_url)").order("last_message_at",{ascending:false});
     if(error){ setOff(true); setThreads([]); return; } setOff(false); setThreads(data||[]); }
-  async function open(th){ setSel(th); const {data}=await sb.from("messages").select("*").eq("thread_id",th.id).order("created_at",{ascending:true}); setMsgs(data||[]); }
+  async function open(th){ setSel(th); const {data}=await sb.from(isH?"house_messages":"messages").select("*").eq("thread_id",th.id).order("created_at",{ascending:true}); setMsgs(data||[]); }
   async function send(){ if(!reply.trim()||!sel) return; setBusy(true);
-    const {error}=await sb.from("messages").insert({thread_id:sel.id,sender:"team",body:reply,type:"chat"});
+    const {error}=await sb.from(isH?"house_messages":"messages").insert({thread_id:sel.id,sender:"team",body:reply,type:"chat"});
     if(error){ err(error); setBusy(false); return; }
-    await sb.from("company_threads").update({last_message_at:new Date().toISOString(),status:"open"}).eq("id",sel.id);
+    await sb.from(isH?"house_threads":"company_threads").update({last_message_at:new Date().toISOString(),status:"open"}).eq("id",sel.id);
     setReply(""); setBusy(false); open(sel); load(); }
   async function viewAtt(p){ const {data,error}=await sb.storage.from("guest-uploads").createSignedUrl(p,3600); if(error) return err(error); window.open(data.signedUrl,"_blank","noreferrer"); }
-  if(off) return <Empty>Postfach wird aktiviert, sobald die Firmen-Tabellen (companies / company_threads / messages) + Bucket „guest-uploads" angelegt sind. Backend: Jean.</Empty>;
+  if(off&&!isH) return (<div className="space-y-4"><div className="flex justify-between items-center">{toggle()}</div><Empty>Firmen-Postfach wird aktiviert, sobald companies/company_threads/messages + Bucket „guest-uploads" da sind. Backend: Jean.</Empty></div>);
   if(threads===null) return <Skeleton/>;
   return (
     <div className="space-y-4">
-      <div className="flex justify-end"><Btn onClick={()=>setShowBc(true)}>📢 Störung/Info senden</Btn></div>
+      <div className="flex justify-between items-center">{toggle()}<Btn onClick={()=>setShowBc(true)}>📢 Störung/Info senden</Btn></div>
+      {isH&&housePending&&<Empty>Haus-Kanal wird aktiviert, sobald house_threads / house_messages + RPCs angelegt sind. Backend: Jean.</Empty>}
       <div className="grid md:grid-cols-3 gap-4">
       <Card className="p-3 md:col-span-1">
-        <PageHead title="Postfach" sub={threads.length+" Fäden"}/>
+        <PageHead title={isH?"Haus-Postfach":"Firmen-Postfach"} sub={threads.length+" Fäden"}/>
         <div className="space-y-1 mt-2">{threads.length===0&&<Empty>Keine Fäden</Empty>}
           {threads.map(th=>{ const c=th.companies||{}; return (
             <button key={th.id} onClick={()=>open(th)} className={"w-full text-left px-3 py-2 rounded-lg "+(sel&&sel.id===th.id?"bg-blue-50 border border-blue-200":"hover:bg-slate-50")}>
               <div className="flex items-center gap-2">
-                {c.accent_color&&<span className="w-2.5 h-2.5 rounded-full shrink-0" style={{background:c.accent_color}}/>}
-                {c.logo_url&&<img src={c.logo_url} alt="" className="w-5 h-5 rounded object-contain shrink-0"/>}
-                <span className="font-semibold text-sm text-slate-800 truncate">{c.display_name||c.name||"—"}</span>
+                {!isH&&c.accent_color&&<span className="w-2.5 h-2.5 rounded-full shrink-0" style={{background:c.accent_color}}/>}
+                {!isH&&c.logo_url&&<img src={c.logo_url} alt="" className="w-5 h-5 rounded object-contain shrink-0"/>}
+                {isH&&<span className="text-sm">🏠</span>}
+                <span className="font-semibold text-sm text-slate-800 truncate">{label(th)}</span>
               </div>
               <div className="text-xs text-slate-400">{fmt(th.last_message_at)} · {th.status||"open"}</div>
             </button>); })}</div>
@@ -1365,14 +1413,16 @@ function Postfach({bump}){
       <Card className="p-4 md:col-span-2">
         {!sel?<Empty>Faden wählen</Empty>:<div>
           <div className="flex items-center gap-2 mb-2">
-            {sel.companies&&sel.companies.accent_color&&<span className="w-3 h-3 rounded-full shrink-0" style={{background:sel.companies.accent_color}}/>}
-            {sel.companies&&sel.companies.logo_url&&<img src={sel.companies.logo_url} alt="" className="w-6 h-6 rounded object-contain shrink-0"/>}
-            <span className="font-semibold text-slate-800">{(sel.companies&&(sel.companies.display_name||sel.companies.name))||"—"}</span>
+            {!isH&&sel.companies&&sel.companies.accent_color&&<span className="w-3 h-3 rounded-full shrink-0" style={{background:sel.companies.accent_color}}/>}
+            {!isH&&sel.companies&&sel.companies.logo_url&&<img src={sel.companies.logo_url} alt="" className="w-6 h-6 rounded object-contain shrink-0"/>}
+            {isH&&<span className="text-base">🏠</span>}
+            <span className="font-semibold text-slate-800">{label(sel)}</span>
           </div>
           <div className="space-y-2 max-h-[50vh] overflow-y-auto mb-3">
             {msgs.length===0&&<Empty>Noch keine Nachrichten</Empty>}
             {msgs.map(m=>(
               <div key={m.id} className={"max-w-[80%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-blue-600 text-white ml-auto":"bg-slate-100 text-slate-700")}>
+                {m.sender!=="team"&&m.author&&<div className="text-[10px] opacity-70 mb-0.5">{m.author}</div>}
                 {m.type&&m.type!=="chat"&&<div className="text-[10px] uppercase opacity-70 mb-0.5">{m.type}</div>}
                 {m.body}
                 {m.attachment_path&&<button onClick={()=>viewAtt(m.attachment_path)} className="block text-[11px] underline mt-1">📎 Anhang ansehen</button>}
@@ -1380,7 +1430,7 @@ function Postfach({bump}){
               </div>))}
           </div>
           <div className="flex gap-2">
-            <input className={inputCls+" flex-1 !mt-0"} value={reply} onChange={e=>setReply(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Antwort an die Firma…"/>
+            <input className={inputCls+" flex-1 !mt-0"} value={reply} onChange={e=>setReply(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder={isH?"Antwort ans Haus…":"Antwort an die Firma…"}/>
             <Btn onClick={send}>{busy?"…":"Senden"}</Btn>
           </div>
         </div>}
