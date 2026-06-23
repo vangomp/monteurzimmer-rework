@@ -550,7 +550,7 @@ function Extensions({bump}) {
 function ObjektForm({rec,onClose,onSaved}){
   const [f,setF]=useState({code:rec?rec.code||"":"",name:rec?rec.name||"":"",address:rec?rec.address||"":"",immoday_project_id:rec?rec.immoday_project_id||"":""});
   const [busy,setBusy]=useState(false); const [projects,setProjects]=useState(IMMODAY_PROJECTS);
-  useEffect(()=>{ sbImmo.from("projects").select("id,name").order("name").then(({data})=>{ if(data&&data.length) setProjects(data); }).catch(()=>{}); },[]); // eslint-disable-line
+  useEffect(()=>{ (async()=>{ try{ let {data}=await sbImmo.rpc("list_projects"); if(!data||!data.length){ const r=await sbImmo.from("projects").select("id,name").order("name"); data=r.data; } if(data&&data.length) setProjects(data.map(p=>({id:p.id,name:p.name}))); }catch(e){} })(); },[]); // eslint-disable-line
   const u=(k,v)=>setF(x=>({...x,[k]:v}));
   const save=async()=>{ if(!f.code.trim())return toast("Code nötig","err"); setBusy(true);
     const payload={code:f.code,name:f.name||null,address:f.address||null,immoday_project_id:f.immoday_project_id||null};
