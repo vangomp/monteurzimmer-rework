@@ -130,7 +130,7 @@ const IMMODAY_PROJECTS=[{id:"MÜ-GS6",name:"Gambacher Straße 6, Münzenberg"},{
 const loaders = {
   rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number").then(r=>r.data||[]),
   roomsMin: ()=> sb.from("rooms").select("id,room_number,capacity").order("room_number").then(r=>r.data||[]),
-  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address,immoday_project_id,inspection_items").order("code").then(r=>r.data||[]),
+  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address,immoday_project_id,inspection_items,wifi_ssid,wifi_password").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
   checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, preferred_language, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(name,address))), additional_guests(*)").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
@@ -548,18 +548,20 @@ function Extensions({bump}) {
 
 /* ============================ CLEANING ============================ */
 function ObjektForm({rec,onClose,onSaved}){
-  const [f,setF]=useState({code:rec?rec.code||"":"",name:rec?rec.name||"":"",address:rec?rec.address||"":"",immoday_project_id:rec?rec.immoday_project_id||"":""});
+  const [f,setF]=useState({code:rec?rec.code||"":"",name:rec?rec.name||"":"",address:rec?rec.address||"":"",immoday_project_id:rec?rec.immoday_project_id||"":"",wifi_ssid:rec?rec.wifi_ssid||"":"",wifi_password:rec?rec.wifi_password||"":""});
   const [busy,setBusy]=useState(false); const [projects,setProjects]=useState(IMMODAY_PROJECTS);
   useEffect(()=>{ (async()=>{ try{ let {data}=await sbImmo.rpc("list_projects"); if(!data||!data.length){ const r=await sbImmo.from("projects").select("id,name").order("name"); data=r.data; } if(data&&data.length) setProjects(data.map(p=>({id:p.id,name:p.name}))); }catch(e){} })(); },[]); // eslint-disable-line
   const u=(k,v)=>setF(x=>({...x,[k]:v}));
   const save=async()=>{ if(!f.code.trim())return toast("Code nötig","err"); setBusy(true);
-    const payload={code:f.code,name:f.name||null,address:f.address||null,immoday_project_id:f.immoday_project_id||null};
+    const payload={code:f.code,name:f.name||null,address:f.address||null,immoday_project_id:f.immoday_project_id||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null};
     const {error}=rec?await sb.from("cleaning_objekte").update(payload).eq("id",rec.id):await sb.from("cleaning_objekte").insert(payload);
     setBusy(false); if(error)return err(error); toast(rec?"Objekt gespeichert":"Objekt angelegt"); onSaved&&onSaved(); };
   return (<Modal title={rec?"Objekt bearbeiten":"Neues Objekt"} onClose={onClose}>
     <Field label="Code"><input className={inputCls} value={f.code} onChange={e=>u("code",e.target.value)} placeholder="z.B. GS6"/></Field>
     <Field label="Name"><input className={inputCls} value={f.name} onChange={e=>u("name",e.target.value)}/></Field>
     <Field label="Adresse"><input className={inputCls} value={f.address} onChange={e=>u("address",e.target.value)}/></Field>
+    <Field label="WLAN-Name (ganzes Haus)"><input className={inputCls} value={f.wifi_ssid} onChange={e=>u("wifi_ssid",e.target.value)}/></Field>
+    <Field label="WLAN-Passwort (ganzes Haus)"><input className={inputCls} value={f.wifi_password} onChange={e=>u("wifi_password",e.target.value)}/></Field>
     <Field label="Immoday-Projekt"><select className={inputCls} value={f.immoday_project_id} onChange={e=>u("immoday_project_id",e.target.value)}><option value="">— nicht verknüpft —</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></Field>
     <div className="flex gap-2 mt-2"><Btn onClick={save}>{busy?"…":"Speichern"}</Btn><Btn kind="soft" onClick={onClose}>Abbrechen</Btn></div>
   </Modal>);
@@ -1199,8 +1201,8 @@ function Guest({onAdmin}){
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("houseCode")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
           <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("roomPin")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("wifi")}</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("wifiPw")}</div><div className="font-mono text-slate-800">{room.wifi_password||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("wifi")}</div><div className="font-semibold text-slate-800">{house.wifi_ssid||room.wifi_ssid||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("wifiPw")}</div><div className="font-mono text-slate-800">{house.wifi_password||room.wifi_password||"—"}</div></div>
         </div>
         {(addr||house.name)&&<div className="mt-3 bg-slate-50 rounded-xl p-3 text-sm"><div className="text-xs text-slate-400">{t("address")}</div><div className="font-semibold text-slate-800">{house.name?house.name+" · ":""}{addr||"—"}</div></div>}
         <button onClick={openPlatform} className="block w-full text-center mt-3 bg-slate-900 text-white rounded-xl py-2.5 text-sm font-semibold">💬 {t("openPlat")}</button>
