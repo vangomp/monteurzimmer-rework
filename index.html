@@ -126,12 +126,13 @@ function useList(loader, deps=[]) {
   useEffect(()=>{ let on=true; (async()=>{ try{ const d=await loader(); if(on)setData(d); }catch(e){ err(e); if(on)setData([]); } })(); return ()=>on=false; },deps);
   return [data,reload];
 }
+const IMMODAY_PROJECTS=[{id:"MÜ-GS6",name:"Gambacher Straße 6, Münzenberg"},{id:"KÖ-FWS17",name:"Friedrich-Winter-Str. 17, Kölschhausen"},{id:"EH-WS20",name:"Wetzlarer Straße 20, Ehringshausen"},{id:"LI-ANH51",name:"Alt Niederhofheim 51, Liederbach"},{id:"AS-HS14",name:"Hauptstraße 14, Aßlar-Werdorf"},{id:"BU-GW15",name:"Gambacher Weg 15, Butzbach"},{id:"LE-GS52",name:"Gorkistraße 52, Leipzig"},{id:"LE-LS51",name:"Löbauer Straße 51, Leipzig"},{id:"RA-LW2A",name:"Lössener Weg 2a, Rackwitz"},{id:"EI-KP7",name:"Karlsplatz 7 (Karlshalle), Eisenach"},{id:"P-SELIG",name:"Baustelle Seligenstadt"},{id:"P-FOERDER",name:"Förderstrategie Sanierung"},{id:"P-AI",name:"AI Automatisierung"},{id:"P-STAMM",name:"immocation STAMMTISCH Frankfurt"}];
 const loaders = {
   rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number").then(r=>r.data||[]),
   roomsMin: ()=> sb.from("rooms").select("id,room_number,capacity").order("room_number").then(r=>r.data||[]),
-  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
+  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address,immoday_project_id,inspection_items").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
-  checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, preferred_language, rooms(room_number)), additional_guests(*)").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
+  checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, preferred_language, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(name,address))), additional_guests(*)").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
@@ -468,6 +469,24 @@ function CheckIns({bump}) {
   const shown=rows.filter(c=>!ql||[c.full_name,c.email,c.phone,c.reservations?.guest_name].some(v=>(v||"").toLowerCase().includes(ql)));
   const setVideoOk=async(c,ok)=>{ const {error}=await sb.from("check_ins").update({checkout_video_ok:ok,checkout_video_analyzed_at:new Date().toISOString()}).eq("id",c.id); if(error)return err(error); toast(ok?"Video als OK markiert":"Video beanstandet"); reload(); };
   const viewVideo=async(c)=>{ if(!c.checkout_video_url) return; const {data,error}=await sb.storage.from("checkout-videos").createSignedUrl(c.checkout_video_url,3600); if(error)return err(error); window.open(data.signedUrl,"_blank","noreferrer"); };
+  const wbg=(c)=>{ const r=c.reservations||{}, room=r.rooms||{}, house=room.cleaning_objekte||{};
+    const names=[c.full_name].concat((c.additional_guests||[]).map(g=>g.guest_name).filter(Boolean));
+    const esc=(x)=>(x==null?"":String(x)).replace(/[<>&]/g,m=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[m]));
+    const w=window.open("","_blank"); if(!w){ toast("Popup blockiert — bitte erlauben","err"); return; }
+    const html="<!doctype html><html lang=de><head><meta charset=utf-8><title>Wohnungsgeberbestaetigung</title>"+
+      "<style>body{font-family:Arial,sans-serif;max-width:720px;margin:36px auto;color:#111;line-height:1.5;padding:0 22px}h1{font-size:20px;margin-bottom:2px}.s{font-size:12px;color:#555;margin-top:0}.row{margin:12px 0}.lbl{font-size:11px;color:#555}.val{font-weight:bold;border-bottom:1px solid #999;padding:3px 0;min-height:20px}.sig{margin-top:54px;display:flex;justify-content:space-between}.box{width:46%}@media print{.np{display:none}}</style></head><body>"+
+      "<button class=np onclick=\"window.print()\" style=\"float:right;padding:8px 14px;cursor:pointer\">Drucken</button>"+
+      "<h1>Wohnungsgeberbestaetigung</h1><p class=s>nach \u00a7 19 Bundesmeldegesetz (BMG)</p>"+
+      "<div class=row><div class=lbl>Wohnungsgeber / Vermieter</div><div class=val>JJ Real Estate</div></div>"+
+      "<div class=row><div class=lbl>Anschrift des Wohnungsgebers</div><div class=val>&nbsp;</div></div>"+
+      "<div class=row><div class=lbl>Anschrift der Wohnung (Einzugsobjekt)</div><div class=val>"+esc((house.name?house.name+" \u2014 ":"")+(house.address||room.room_number||""))+"</div></div>"+
+      "<div class=row><div class=lbl>Art des meldepflichtigen Vorgangs</div><div class=val>Einzug</div></div>"+
+      "<div class=row style=\"display:flex;gap:20px\"><div style=\"flex:1\"><div class=lbl>Einzugsdatum</div><div class=val>"+esc(fmt(r.check_in_date))+"</div></div><div style=\"flex:1\"><div class=lbl>Voraussichtlicher Auszug</div><div class=val>"+esc(fmt(r.check_out_date))+"</div></div></div>"+
+      "<div class=row><div class=lbl>Name(n) der meldepflichtigen Person(en)</div><div class=val>"+esc(names.join(", "))+"</div></div>"+
+      "<div class=sig><div class=box><div class=val>&nbsp;</div><div class=lbl>Ort, Datum</div></div><div class=box><div class=val>&nbsp;</div><div class=lbl>Unterschrift Wohnungsgeber</div></div></div>"+
+      "</body></html>";
+    w.document.write(html); w.document.close();
+  };
   const th="text-left p-3 whitespace-nowrap";
   const acc={guest:c=>(c.full_name||"").toLowerCase(),firma:c=>(c.reservations?.guest_name||"").toLowerCase(),room:c=>roomShort(c.reservations?.rooms?.room_number),checked:c=>c.checked_in_at||""};
   const sorted=[...shown].sort((a,b)=>{const f=acc[sort.key];if(!f)return 0;const av=f(a),bv=f(b);return (av<bv?-1:av>bv?1:0)*(sort.dir==="asc"?1:-1);});
@@ -488,7 +507,7 @@ function CheckIns({bump}) {
             <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
             <td className="p-3 text-slate-600">{fmt(c.checked_in_at)}</td>
             <td className="p-3">{c.id_card_url?<button onClick={()=>setIdView(c)} className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Ausweis ansehen</button>:<span className="text-slate-400 text-xs">—</span>}</td>
-            <td className="p-3">{ciDone?<Pill text="✓ abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
+            <td className="p-3">{ciDone?<Pill text="✓ abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}<button onClick={()=>wbg(c)} className="block mt-1 text-xs text-blue-600 underline">Wohnungsgeber\u00adbescheinigung</button></td>
             <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}{c.checkout_video_url&&<button onClick={()=>viewVideo(c)} className="ml-1 text-xs text-blue-600 underline">ansehen</button>}</td>
             <td className="p-3">{c.checkout_video_ok===true?<Pill text="OK ✓" cls="bg-emerald-100 text-emerald-700"/>
               :c.checkout_video_ok===false?<Pill text="Beanstandet ✗" cls="bg-rose-100 text-rose-700"/>
@@ -528,6 +547,23 @@ function Extensions({bump}) {
 }
 
 /* ============================ CLEANING ============================ */
+function ObjektForm({rec,onClose,onSaved}){
+  const [f,setF]=useState({code:rec?rec.code||"":"",name:rec?rec.name||"":"",address:rec?rec.address||"":"",immoday_project_id:rec?rec.immoday_project_id||"":""});
+  const [busy,setBusy]=useState(false); const [projects,setProjects]=useState(IMMODAY_PROJECTS);
+  useEffect(()=>{ sbImmo.from("projects").select("id,name").order("name").then(({data})=>{ if(data&&data.length) setProjects(data); }).catch(()=>{}); },[]); // eslint-disable-line
+  const u=(k,v)=>setF(x=>({...x,[k]:v}));
+  const save=async()=>{ if(!f.code.trim())return toast("Code nötig","err"); setBusy(true);
+    const payload={code:f.code,name:f.name||null,address:f.address||null,immoday_project_id:f.immoday_project_id||null};
+    const {error}=rec?await sb.from("cleaning_objekte").update(payload).eq("id",rec.id):await sb.from("cleaning_objekte").insert(payload);
+    setBusy(false); if(error)return err(error); toast(rec?"Objekt gespeichert":"Objekt angelegt"); onSaved&&onSaved(); };
+  return (<Modal title={rec?"Objekt bearbeiten":"Neues Objekt"} onClose={onClose}>
+    <Field label="Code"><input className={inputCls} value={f.code} onChange={e=>u("code",e.target.value)} placeholder="z.B. GS6"/></Field>
+    <Field label="Name"><input className={inputCls} value={f.name} onChange={e=>u("name",e.target.value)}/></Field>
+    <Field label="Adresse"><input className={inputCls} value={f.address} onChange={e=>u("address",e.target.value)}/></Field>
+    <Field label="Immoday-Projekt"><select className={inputCls} value={f.immoday_project_id} onChange={e=>u("immoday_project_id",e.target.value)}><option value="">— nicht verknüpft —</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></Field>
+    <div className="flex gap-2 mt-2"><Btn onClick={save}>{busy?"…":"Speichern"}</Btn><Btn kind="soft" onClick={onClose}>Abbrechen</Btn></div>
+  </Modal>);
+}
 function NewOrderModal({objekte,rooms,onClose,onSaved}){
   const [objektId,setObjektId]=useState(""); const [sel,setSel]=useState({});
   const [bis,setBis]=useState(""); const [kommentar,setKommentar]=useState("");
@@ -570,13 +606,15 @@ function IdViewModal({checkin,onClose}){
 function Cleaning({bump}) {
   const [orders,reloadO]=useList(loaders.orders,[bump]);
   const [reports]=useList(loaders.reports,[bump]);
-  const [objekte]=useList(loaders.objekte,[bump]);
+  const [objekte,reloadObjekte]=useList(loaders.objekte,[bump]);
   const [nuki]=useList(loaders.nuki,[bump]);
   const [rooms]=useList(loaders.rooms,[bump]);
   const [showNew,setShowNew]=useState(false);
+  const [editObj,setEditObj]=useState(null);
   if(!orders||!reports||!objekte||!nuki||!rooms) return <Skeleton/>;
   const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
     if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
+  const delObj=async(o)=>{ if(!confirm("Objekt "+o.code+" löschen?"))return; const {error}=await sb.from("cleaning_objekte").delete().eq("id",o.id); if(error)return err(error); toast("Objekt gelöscht"); reloadObjekte(); };
   return (
     <div className="space-y-6">
       <PageHead title="Reinigung & Häuser" sub="Live aus Supabase."/>
@@ -629,12 +667,15 @@ function Cleaning({bump}) {
           </div>))}</div>
       </Card>
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">🏠 Häuser & Akkus</h2>
-        <div className="grid sm:grid-cols-2 gap-3">{objekte.map(o=>{const lock=nuki.find(n=>(n.lock_name||"").toLowerCase().includes((o.code||"").toLowerCase()));return(
+        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🏠 Häuser & Objekte</h2><Btn onClick={()=>setEditObj("new")}>+ Objekt</Btn></div>
+        <div className="grid sm:grid-cols-2 gap-3">{objekte.map(o=>{const lock=nuki.find(n=>(n.lock_name||"").toLowerCase().includes((o.code||"").toLowerCase())); const proj=IMMODAY_PROJECTS.find(p=>p.id===o.immoday_project_id);return(
           <div key={o.id} className="border border-slate-200 rounded-xl px-4 py-3">
-            <div className="font-medium text-slate-800">{o.code}</div><div className="text-xs text-slate-400">{o.name}{o.address?` · ${o.address}`:""}</div>
+            <div className="flex items-start justify-between gap-2"><div><div className="font-medium text-slate-800">{o.code}</div><div className="text-xs text-slate-400">{o.name}{o.address?` · ${o.address}`:""}</div></div>
+              <div className="flex gap-1 shrink-0"><IconBtn title="Bearbeiten" onClick={()=>setEditObj(o)}>✎</IconBtn><IconBtn title="Löschen" color="text-rose-500" onClick={()=>delObj(o)}>🗑</IconBtn></div></div>
+            <div className="text-xs mt-1">{o.immoday_project_id?<span className="text-blue-600">🔗 Immoday: {proj?proj.name:o.immoday_project_id}</span>:<span className="text-slate-400">nicht mit Immoday verknüpft</span>}</div>
             {lock&&<div className="text-xs text-slate-500 mt-1">🔋 <Battery v={lock.battery_charge}/> · {lock.lock_name}</div>}
           </div>);})}</div>
+        {editObj&&<ObjektForm rec={editObj==="new"?null:editObj} onClose={()=>setEditObj(null)} onSaved={()=>{setEditObj(null);reloadObjekte();}}/>}
       </Card>
     </div>
   );
@@ -1268,8 +1309,28 @@ function Checkout({token}){
 }
 
 /* ============================ ADMIN — POSTFACH (Firmen-Kanal, Phase C MVP) ============================ */
+function BroadcastModal({objekte,onClose,onSent}){
+  const [sel,setSel]=useState({}); const [body,setBody]=useState(""); const [busy,setBusy]=useState(false); const [preview,setPreview]=useState(null);
+  const houseIds=Object.keys(sel).filter(k=>sel[k]);
+  useEffect(()=>{ (async()=>{ if(!houseIds.length){ setPreview(null); return; }
+    const today=new Date().toISOString().slice(0,10);
+    const {data}=await sb.from("reservations").select("company_id, companies(name,display_name), rooms!inner(objekt_id)").is("archived_at",null).gte("check_out_date",today).in("rooms.objekt_id",houseIds);
+    const map={}; (data||[]).forEach(r=>{ if(r.company_id) map[r.company_id]=(r.companies&&(r.companies.display_name||r.companies.name))||r.company_id; });
+    setPreview(Object.values(map)); })(); },[JSON.stringify(houseIds)]); // eslint-disable-line
+  const send=async()=>{ if(!body.trim())return toast("Nachricht eingeben","err"); if(!houseIds.length)return toast("Mind. ein Haus wählen","err"); setBusy(true);
+    const {data,error}=await sb.rpc("send_broadcast",{p_body:body,p_house_ids:houseIds}); setBusy(false);
+    if(error)return err(error); const n=(data&&(data.count!=null?data.count:(Array.isArray(data.affected)?data.affected.length:0)))||0; toast("Gesendet an "+n+" Firma(en)"); onSent&&onSent(); onClose(); };
+  return (<Modal title="Störung / Info senden" onClose={onClose}>
+    <div className="text-xs text-slate-500 mb-1">Betroffene Häuser</div>
+    <div className="flex flex-wrap gap-1.5 mb-3">{objekte.map(o=>(<label key={o.id} className={"text-xs px-2 py-1 rounded-lg cursor-pointer border "+(sel[o.id]?"bg-blue-50 border-blue-300 text-blue-700":"border-slate-200 text-slate-500")}><input type="checkbox" className="hidden" checked={!!sel[o.id]} onChange={e=>setSel(x=>({...x,[o.id]:e.target.checked}))}/>{o.code}</label>))}</div>
+    <Field label="Nachricht"><textarea className={inputCls} rows={4} value={body} onChange={e=>setBody(e.target.value)} placeholder="z.B. In FWS17 fällt heute die Elektrik aus…"/></Field>
+    {preview&&<div className="text-xs text-slate-600 mb-2 bg-slate-50 rounded-lg p-2">Geht an {preview.length} Firma(en){preview.length?": "+preview.join(", "):""}</div>}
+    <div className="flex gap-2 mt-2"><Btn onClick={send}>{busy?"…":"Senden"}</Btn><Btn kind="soft" onClick={onClose}>Abbrechen</Btn></div>
+  </Modal>);
+}
 function Postfach({bump}){
   const [threads,setThreads]=useState(null),[sel,setSel]=useState(null),[msgs,setMsgs]=useState([]),[reply,setReply]=useState(""),[busy,setBusy]=useState(false),[off,setOff]=useState(false);
+  const [objekte]=useList(loaders.objekte,[bump]); const [showBc,setShowBc]=useState(false);
   useEffect(()=>{ load(); },[bump]); // eslint-disable-line
   async function load(){ const {data,error}=await sb.from("company_threads").select("*, companies(name,display_name,accent_color,logo_url)").order("last_message_at",{ascending:false});
     if(error){ setOff(true); setThreads([]); return; } setOff(false); setThreads(data||[]); }
@@ -1283,7 +1344,9 @@ function Postfach({bump}){
   if(off) return <Empty>Postfach wird aktiviert, sobald die Firmen-Tabellen (companies / company_threads / messages) + Bucket „guest-uploads" angelegt sind. Backend: Jean.</Empty>;
   if(threads===null) return <Skeleton/>;
   return (
-    <div className="grid md:grid-cols-3 gap-4">
+    <div className="space-y-4">
+      <div className="flex justify-end"><Btn onClick={()=>setShowBc(true)}>📢 Störung/Info senden</Btn></div>
+      <div className="grid md:grid-cols-3 gap-4">
       <Card className="p-3 md:col-span-1">
         <PageHead title="Postfach" sub={threads.length+" Fäden"}/>
         <div className="space-y-1 mt-2">{threads.length===0&&<Empty>Keine Fäden</Empty>}
@@ -1320,6 +1383,8 @@ function Postfach({bump}){
           </div>
         </div>}
       </Card>
+      </div>
+      {showBc&&<BroadcastModal objekte={objekte} onClose={()=>setShowBc(false)} onSent={load}/>}
     </div>
   );
 }
