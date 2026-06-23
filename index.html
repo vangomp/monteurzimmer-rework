@@ -131,7 +131,7 @@ const loaders = {
   roomsMin: ()=> sb.from("rooms").select("id,room_number,capacity").order("room_number").then(r=>r.data||[]),
   objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
-  checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
+  checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, preferred_language, rooms(room_number)), additional_guests(*)").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
@@ -462,10 +462,12 @@ function CheckIns({bump}) {
   const [rows,reload]=useList(loaders.checkins,[bump]);
   const [q,setQ]=useState("");
   const [sort,setSort]=useState({key:"checked",dir:"desc"});
+  const [idView,setIdView]=useState(null);
   if(!rows) return <Skeleton/>;
   const ql=q.trim().toLowerCase();
   const shown=rows.filter(c=>!ql||[c.full_name,c.email,c.phone,c.reservations?.guest_name].some(v=>(v||"").toLowerCase().includes(ql)));
   const setVideoOk=async(c,ok)=>{ const {error}=await sb.from("check_ins").update({checkout_video_ok:ok,checkout_video_analyzed_at:new Date().toISOString()}).eq("id",c.id); if(error)return err(error); toast(ok?"Video als OK markiert":"Video beanstandet"); reload(); };
+  const viewVideo=async(c)=>{ if(!c.checkout_video_url) return; const {data,error}=await sb.storage.from("checkout-videos").createSignedUrl(c.checkout_video_url,3600); if(error)return err(error); window.open(data.signedUrl,"_blank","noreferrer"); };
   const th="text-left p-3 whitespace-nowrap";
   const acc={guest:c=>(c.full_name||"").toLowerCase(),firma:c=>(c.reservations?.guest_name||"").toLowerCase(),room:c=>roomShort(c.reservations?.rooms?.room_number),checked:c=>c.checked_in_at||""};
   const sorted=[...shown].sort((a,b)=>{const f=acc[sort.key];if(!f)return 0;const av=f(a),bv=f(b);return (av<bv?-1:av>bv?1:0)*(sort.dir==="asc"?1:-1);});
@@ -482,12 +484,12 @@ function CheckIns({bump}) {
           <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
             <td className="p-3 font-semibold text-slate-800">{c.full_name}</td>
             <td className="p-3 text-slate-600">{c.reservations?.guest_name||"—"}</td>
-            <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}</td>
+            <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}{c.reservations?.preferred_language&&<React.Fragment><br/><span className="text-[10px] text-slate-400">Sprache: {c.reservations.preferred_language.toUpperCase()}</span></React.Fragment>}</td>
             <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
             <td className="p-3 text-slate-600">{fmt(c.checked_in_at)}</td>
-            <td className="p-3">{c.id_card_url?<span className="text-emerald-600 text-xs">✓ vorhanden</span>:<span className="text-slate-400 text-xs">—</span>}</td>
+            <td className="p-3">{c.id_card_url?<button onClick={()=>setIdView(c)} className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Ausweis ansehen</button>:<span className="text-slate-400 text-xs">—</span>}</td>
             <td className="p-3">{ciDone?<Pill text="✓ abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
-            <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
+            <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}{c.checkout_video_url&&<button onClick={()=>viewVideo(c)} className="ml-1 text-xs text-blue-600 underline">ansehen</button>}</td>
             <td className="p-3">{c.checkout_video_ok===true?<Pill text="OK ✓" cls="bg-emerald-100 text-emerald-700"/>
               :c.checkout_video_ok===false?<Pill text="Beanstandet ✗" cls="bg-rose-100 text-rose-700"/>
               :vid?<div className="flex gap-1"><button onClick={()=>setVideoOk(c,true)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold">OK</button><button onClick={()=>setVideoOk(c,false)} className="text-xs px-2 py-1 rounded bg-rose-600 text-white font-semibold">✗</button></div>
@@ -496,6 +498,7 @@ function CheckIns({bump}) {
           {!shown.length&&<tr><td colSpan="9" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
         </tbody></table></Card>
       <p className="text-xs text-slate-400">„Video-Analyse" jetzt manuell (OK/✗) → später automatisch durch die KI-Auswertung; speist die 20 €-Cashback-Freigabe.</p>
+      {idView&&<IdViewModal checkin={idView} onClose={()=>setIdView(null)}/>}
     </div>
   );
 }
@@ -525,12 +528,53 @@ function Extensions({bump}) {
 }
 
 /* ============================ CLEANING ============================ */
+function NewOrderModal({objekte,rooms,onClose,onSaved}){
+  const [objektId,setObjektId]=useState(""); const [sel,setSel]=useState({});
+  const [bis,setBis]=useState(""); const [kommentar,setKommentar]=useState("");
+  const [busy,setBusy]=useState(false); const [link,setLink]=useState("");
+  const houseRooms=rooms.filter(r=>r.objekt_id===objektId);
+  useEffect(()=>{ const m={}; rooms.filter(r=>r.objekt_id===objektId).forEach(r=>m[r.id]=true); setSel(m); },[objektId]); // eslint-disable-line
+  const create=async()=>{ if(!objektId) return toast("Bitte Haus wählen","err"); if(!bis) return toast("Bitte Frist wählen","err");
+    const items=houseRooms.filter(r=>sel[r.id]).map(r=>({item_id:`room-${r.id}`, item_label:r.room_number}));
+    if(!items.length) return toast("Mind. ein Zimmer wählen","err"); setBusy(true);
+    const {data,error}=await sb.functions.invoke("create-cleaning-order",{body:{objekt_id:objektId, items_to_clean:items, zu_reinigen_bis:new Date(bis).toISOString(), kommentar:kommentar||null}});
+    setBusy(false); if(error||!data||data.error){ return err(error||new Error((data&&data.error)||"Fehler")); }
+    setLink(`https://check-in-rho-bice.vercel.app/cleaning/${data.token}`); toast("Auftrag erstellt"); onSaved&&onSaved(); };
+  return (<Modal title="Neuer Reinigungsauftrag" onClose={onClose}>
+    {link
+      ? <div className="space-y-3">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✓ Auftrag erstellt. Link für die Reinigungskraft:</div>
+          <div className="flex gap-2"><input readOnly value={link} className={inputCls+" !mt-0"}/><Btn onClick={()=>{navigator.clipboard.writeText(link);toast("Link kopiert");}}>Kopieren</Btn></div>
+          <Btn kind="soft" onClick={onClose}>Schließen</Btn></div>
+      : <div>
+          <Field label="Haus / Objekt"><select className={inputCls} value={objektId} onChange={e=>setObjektId(e.target.value)}><option value="">Objekt auswählen…</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code} · {o.name}</option>)}</select></Field>
+          {objektId&&<div className="mb-3"><div className="text-xs text-slate-500 mb-1">Zimmer / Positionen</div>
+            <div className="flex flex-wrap gap-1.5">{houseRooms.map(r=>(<label key={r.id} className={"text-xs px-2 py-1 rounded-lg cursor-pointer border "+(sel[r.id]?"bg-blue-50 border-blue-300 text-blue-700":"border-slate-200 text-slate-500")}><input type="checkbox" className="hidden" checked={!!sel[r.id]} onChange={e=>setSel(x=>({...x,[r.id]:e.target.checked}))}/>{roomShort(r.room_number)}</label>))}{!houseRooms.length&&<span className="text-xs text-slate-400">Keine Zimmer für dieses Haus.</span>}</div></div>}
+          <Field label="Zu reinigen bis"><input type="datetime-local" className={inputCls} value={bis} onChange={e=>setBis(e.target.value)}/></Field>
+          <Field label="Kommentar (optional)"><textarea className={inputCls} rows={3} value={kommentar} onChange={e=>setKommentar(e.target.value)} placeholder="Zusätzliche Hinweise für die Reinigungskraft…"/></Field>
+          <div className="flex gap-2 mt-2"><Btn onClick={create}>{busy?"…":"Auftrag erstellen"}</Btn><Btn kind="soft" onClick={onClose}>Abbrechen</Btn></div>
+        </div>}
+  </Modal>);
+}
+function IdViewModal({checkin,onClose}){
+  const [urls,setUrls]=useState(null);
+  useEffect(()=>{ (async()=>{ const paths=[]; const add=(l,p)=>{ if(p) paths.push({l,p}); };
+    add("Hauptgast — Vorderseite",checkin.id_card_url); add("Hauptgast — Rückseite",checkin.id_card_back_url);
+    (checkin.additional_guests||[]).forEach((g,i)=>{ add((g.guest_name||("Gast "+(i+2)))+" — Vorderseite",g.id_card_front_url); add((g.guest_name||("Gast "+(i+2)))+" — Rückseite",g.id_card_back_url); });
+    const out=[]; for(const it of paths){ const {data}=await sb.storage.from("id-cards").createSignedUrl(it.p,3600); out.push({label:it.l, url:data&&data.signedUrl}); }
+    setUrls(out); })(); },[]); // eslint-disable-line
+  return (<Modal title={"Ausweise · "+(checkin.full_name||"")} onClose={onClose}>
+    {!urls?<Skeleton/>:urls.length?<div className="space-y-3">{urls.map((u,i)=>(<div key={i}><div className="text-xs text-slate-500 mb-1">{u.label}</div>{u.url?<a href={u.url} target="_blank" rel="noreferrer"><img src={u.url} alt="" className="rounded-lg border border-slate-200 max-h-72"/></a>:<span className="text-xs text-slate-400">—</span>}</div>))}</div>:<div className="text-sm text-slate-400">Keine Ausweise hinterlegt.</div>}
+  </Modal>);
+}
 function Cleaning({bump}) {
   const [orders,reloadO]=useList(loaders.orders,[bump]);
   const [reports]=useList(loaders.reports,[bump]);
   const [objekte]=useList(loaders.objekte,[bump]);
   const [nuki]=useList(loaders.nuki,[bump]);
-  if(!orders||!reports||!objekte||!nuki) return <Skeleton/>;
+  const [rooms]=useList(loaders.rooms,[bump]);
+  const [showNew,setShowNew]=useState(false);
+  if(!orders||!reports||!objekte||!nuki||!rooms) return <Skeleton/>;
   const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
     if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
   return (
@@ -565,14 +609,15 @@ function Cleaning({bump}) {
         <div className="flex gap-4 text-xs text-slate-400 pt-3"><span><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 align-middle mr-1"></span>letzte</span><span><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 align-middle mr-1"></span>nächste</span><span><span className="inline-block w-3 h-0.5 bg-slate-400 align-middle mr-1"></span>heute</span></div>
       </Card>
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">🧹 Offene Aufträge ({orders.length})</h2>
-        <div className="space-y-2">{orders.map(o=>(
+        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🧹 Offene Aufträge ({orders.length})</h2><Btn onClick={()=>setShowNew(true)}>+ Neuer Reinigungsauftrag</Btn></div>
+        <div className="space-y-2">{orders.map(o=>{ const link=`https://check-in-rho-bice.vercel.app/cleaning/${o.token}`; return (
           <div key={o.id} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-xl px-4 py-3">
             <div><div className="font-medium text-slate-800">{o.cleaning_objekte?.code||"—"} · {Array.isArray(o.items_to_clean)?o.items_to_clean.length:0} Position(en)</div>
               <div className="text-xs text-slate-400">zu reinigen bis: {fmt(o.zu_reinigen_bis)}{o.kommentar?` · ${o.kommentar}`:""}</div></div>
-            <Btn kind="soft" size="sm" onClick={()=>archiveOrder(o)}>Archivieren</Btn>
-          </div>))}
+            <div className="flex gap-2"><Btn kind="soft" size="sm" onClick={()=>{navigator.clipboard.writeText(link);toast("Link kopiert");}}>🔗 Link</Btn><Btn kind="soft" size="sm" onClick={()=>archiveOrder(o)}>Archivieren</Btn></div>
+          </div>);})}
           {!orders.length&&<div className="text-sm text-slate-400">Keine offenen Aufträge.</div>}</div>
+        {showNew&&<NewOrderModal objekte={objekte} rooms={rooms} onClose={()=>setShowNew(false)} onSaved={reloadO}/>}
       </Card>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">📋 Reports ({reports.length}, neueste)</h2>
@@ -604,22 +649,23 @@ function Occupancy({bump}) {
   const [win,setWin]=useState(12);
   if(!rooms||!res) return <Skeleton/>;
   const roomHouse={}; rooms.forEach(r=>roomHouse[r.id]=r.cleaning_objekte?.code||"—");
+  const roomCap={}; rooms.forEach(r=>roomCap[r.id]=r.capacity||1);
   const now=new Date(); const months=[];
   for(let i=-(win-4);i<4;i++){ const d=new Date(now.getFullYear(),now.getMonth()+i,1); months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }
   const mset=new Set(months);
   const md={}; months.forEach(m=>md[m]={total:0,byHouse:{},byCompany:{}});
   const houses=new Set(), companies=new Set();
   res.forEach(r=>{ if(!r.room_id||!r.check_in_date||!r.check_out_date) return;
-    const house=roomHouse[r.room_id]||"—", comp=r.guest_name||r.code||"—"; houses.add(house); companies.add(comp);
+    const house=roomHouse[r.room_id]||"—", comp=r.guest_name||r.code||"—", cap=roomCap[r.room_id]||1; houses.add(house); companies.add(comp);
     let d=new Date(r.check_in_date); const end=new Date(r.check_out_date); let g=0;
     while(d<end && g<400){ const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-      if(mset.has(m)){ md[m].total++; md[m].byHouse[house]=(md[m].byHouse[house]||0)+1; md[m].byCompany[comp]=(md[m].byCompany[comp]||0)+1; }
+      if(mset.has(m)){ md[m].total+=cap; md[m].byHouse[house]=(md[m].byHouse[house]||0)+cap; md[m].byCompany[comp]=(md[m].byCompany[comp]||0)+cap; }
       d.setDate(d.getDate()+1); g++; } });
   const srcOf=(m)=> dim==="house"?md[m].byHouse: dim==="company"?md[m].byCompany: null;
-  const roomsTotal=rooms.length;
-  const roomsPerHouse={}; rooms.forEach(r=>{const h=roomHouse[r.id]||"—"; roomsPerHouse[h]=(roomsPerHouse[h]||0)+1;});
+  const bedsTotal=rooms.reduce((a,r)=>a+(r.capacity||1),0);
+  const bedsPerHouse={}; rooms.forEach(r=>{const h=roomHouse[r.id]||"—"; bedsPerHouse[h]=(bedsPerHouse[h]||0)+(r.capacity||1);});
   const daysInMonth=(m)=>{const a=m.split("-"); return new Date(+a[0],+a[1],0).getDate();};
-  const capFor=()=> (dim==="house"&&sel!=="__all__")?(roomsPerHouse[sel]||0):roomsTotal;
+  const capFor=()=> (dim==="house"&&sel!=="__all__")?(bedsPerHouse[sel]||0):bedsTotal;
   const nightsFor=(m)=>{ if(dim==="total") return md[m].total; const s=srcOf(m); return sel==="__all__"?Object.values(s).reduce((a,b)=>a+b,0):(s[sel]||0); };
   // Belegung pro Zimmer: belegte Zimmernächte / verfügbare Zimmernächte (Zimmer × Tage). Alle Zimmer vermietet = 100%.
   const valueFor=(m)=>{ const denom=capFor()*daysInMonth(m); return denom?Math.min(100,Math.round(nightsFor(m)/denom*100)):0; };
@@ -627,23 +673,25 @@ function Occupancy({bump}) {
   const options=dim==="house"?[...houses].sort(): dim==="company"?[...companies].sort():[];
   const breakdown={}; if(dim!=="total"){ months.forEach(m=>{ Object.entries(srcOf(m)).forEach(([k,v])=>breakdown[k]=(breakdown[k]||0)+v); }); }
   const winDays=months.reduce((a,m)=>a+daysInMonth(m),0);
-  const brRows=Object.entries(breakdown).map(([k,nights])=>{const cap=(dim==="house")?(roomsPerHouse[k]||0):roomsTotal;const p=cap&&winDays?Math.min(100,Math.round(nights/(cap*winDays)*100)):0;return [k,nights,p];}).sort((a,b)=>b[2]-a[2]);
+  const brRows=Object.entries(breakdown).map(([k,nights])=>{const cap=(dim==="house")?(bedsPerHouse[k]||0):bedsTotal;const p=cap&&winDays?Math.min(100,Math.round(nights/(cap*winDays)*100)):0;return [k,nights,p];}).sort((a,b)=>b[2]-a[2]);
   const windowTotal=months.reduce((a,m)=>a+md[m].total,0);
-  const occ=rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
+  const totalBeds=bedsTotal;
+  const occBeds=rooms.filter(r=>r.status==="occupied").reduce((a,r)=>a+(r.capacity||1),0);
+  const occ=totalBeds?Math.round(occBeds/totalBeds*100):0;
   const fmtMonth=(m)=>{const [y,mo]=m.split("-");return new Date(+y,+mo-1,1).toLocaleDateString("de-DE",{month:"short"});};
   const dimBtn=(k,l)=><button key={k} onClick={()=>{setDim(k);setSel("__all__");}} className={"px-3 py-1.5 rounded-lg text-xs font-semibold "+(dim===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>;
   return (
     <div className="space-y-6">
-      <PageHead title="Auslastung & Umsatz" sub="Belegung pro Zimmer (%) — alle Zimmer vermietet = 100%. Umsatz folgt mit Qonto."/>
+      <PageHead title="Auslastung & Umsatz" sub="Belegung = belegte Betten / Bettenkapazität. Umsatz folgt mit Qonto."/>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung heute</div></Card>
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{rooms.filter(r=>r.status==="occupied").length}</div><div className="text-sm text-slate-500">belegte Zimmer</div></Card>
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{windowTotal}</div><div className="text-sm text-slate-500">Zimmernächte (12 Mon.)</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung heute (Betten)</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occBeds}<span className="text-lg text-slate-400">/{totalBeds}</span></div><div className="text-sm text-slate-500">belegte Betten</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{windowTotal}</div><div className="text-sm text-slate-500">Bettennächte (12 Mon.)</div></Card>
         <Card className="p-5"><div className="text-3xl font-bold text-slate-400">€ —</div><div className="text-sm text-slate-500">Umsatz (Qonto folgt)</div></Card>
       </div>
       <Card className="p-5">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
-          <h2 className="font-semibold text-slate-800">Belegung pro Monat (%)</h2>
+          <h2 className="font-semibold text-slate-800">Belegung pro Monat (Betten %)</h2>
           <div className="flex items-center gap-2 flex-wrap">
             <select value={win} onChange={e=>setWin(+e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value={6}>6 Mon.</option><option value={12}>12 Mon.</option><option value={24}>24 Mon.</option></select>
             <div className="flex gap-1">{dimBtn("total","Gesamt")}{dimBtn("house","Nach Haus")}{dimBtn("company","Nach Firma")}</div>
