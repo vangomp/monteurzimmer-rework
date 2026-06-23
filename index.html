@@ -299,11 +299,11 @@ function Reservations({bump}) {
         </table>
       </Card>
       <p className="text-xs text-slate-400">Qonto-Checkbox = manuell „Rechnung erstellt". Geplant: Auto-Abgleich + „Rechnung in Qonto erstellen".</p>
-      {edit&&<ResForm rec={edit==="new"?null:edit} rooms={roomOpts||[]} onSave={save} onClose={()=>setEdit(null)}/>}
+      {edit&&<ResForm rec={edit==="new"?null:edit} rooms={roomOpts||[]} reservations={rows} onSave={save} onClose={()=>setEdit(null)}/>}
     </div>
   );
 }
-function ResForm({rec,rooms,onSave,onClose}) {
+function ResForm({rec,rooms,reservations,onSave,onClose}) {
   const [f,setF]=useState({ guest_name:rec?.guest_name||"", guest_email:rec?.guest_email||"", room_id:rec?.room_id||"",
     check_in_date:rec?.check_in_date||"", check_out_date:rec?.check_out_date||"", contact_channel:rec?.contact_channel||"", preferred_language:rec?.preferred_language||"de",
     persons:rec?.persons??"", status:rec?.status||"confirmed" });
@@ -311,20 +311,37 @@ function ResForm({rec,rooms,onSave,onClose}) {
   const selRoom=rooms.find(r=>String(r.id)===String(f.room_id));
   const cap=selRoom?.capacity||null;
   const pers=Number(f.persons)||0;
+  const validRange=f.check_in_date&&f.check_out_date&&f.check_in_date<f.check_out_date;
+  // Rooms occupied in the chosen range. Half-open intervals: a room whose check_out is the new check_in is free.
+  const conflictIds=new Set();
+  if(validRange) (reservations||[]).forEach(r=>{ if(!r.room_id||r.archived_at||String(r.id)===String(rec?.id))return;
+    if(r.check_in_date&&r.check_out_date&&r.check_in_date<f.check_out_date&&r.check_out_date>f.check_in_date) conflictIds.add(String(r.room_id)); });
+  const availRooms=validRange?rooms.filter(r=>!conflictIds.has(String(r.id))):rooms;
+  const selUnavailable=validRange&&f.room_id&&conflictIds.has(String(f.room_id));
+  const addDays=(d,n)=>{ const x=new Date(d+"T00:00:00"); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); };
+  const setDur=(n)=>setF(s=>{ const start=s.check_in_date||new Date().toISOString().slice(0,10); return {...s,check_in_date:start,check_out_date:addDays(start,n)}; });
   return (
     <Modal title={rec?`Reservierung ${rec.code}`:"Neue Reservierung"} onClose={onClose}>
+      <Field label="Zeitraum (Aufenthalt)">
+        <div className="grid grid-cols-2 gap-3">
+          <div><div className="text-xs text-slate-400 mb-1">Von (Check-in)</div><input type="date" className={inputCls} value={f.check_in_date} onChange={e=>u("check_in_date",e.target.value)}/></div>
+          <div><div className="text-xs text-slate-400 mb-1">Bis (Check-out)</div><input type="date" className={inputCls} min={f.check_in_date||undefined} value={f.check_out_date} onChange={e=>u("check_out_date",e.target.value)}/></div>
+        </div>
+        <div className="flex flex-wrap gap-1 mt-2"><span className="text-xs text-slate-400 mr-1">Dauer ab Check-in:</span>{[["1 Woche",7],["2 Wochen",14],["4 Wochen",28],["3 Monate",90]].map(([l,n])=><button key={l} type="button" onClick={()=>setDur(n)} className="text-xs px-2 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold">+{l}</button>)}</div>
+        {f.check_in_date&&f.check_out_date&&f.check_in_date>=f.check_out_date&&<p className="text-xs text-rose-600 mt-1">Check-out muss nach Check-in liegen.</p>}
+      </Field>
       <Field label="Gast / Firma"><input className={inputCls} value={f.guest_name} onChange={e=>u("guest_name",e.target.value)}/></Field>
       <Field label="E-Mail"><input className={inputCls} value={f.guest_email} onChange={e=>u("guest_email",e.target.value)}/></Field>
-      <Field label="Zimmer"><select className={inputCls} value={f.room_id} onChange={e=>{const v=e.target.value;setF(s=>{const rm=rooms.find(x=>String(x.id)===String(v));return {...s,room_id:v,persons:s.persons||(rm?.capacity||"")};});}}>
-        <option value="">— Zimmer wählen —</option>{rooms.map(r=><option key={r.id} value={r.id}>{r.room_number}{r.capacity?` (max ${r.capacity}P)`:""}</option>)}</select></Field>
+      <Field label="Zimmer (nur im Zeitraum freie)"><select className={inputCls} value={f.room_id} onChange={e=>{const v=e.target.value;setF(s=>{const rm=rooms.find(x=>String(x.id)===String(v));return {...s,room_id:v,persons:s.persons||(rm?.capacity||"")};});}}>
+        <option value="">{validRange?"— freies Zimmer wählen —":"— erst Zeitraum wählen —"}</option>
+        {availRooms.map(r=><option key={r.id} value={r.id}>{r.room_number}{r.capacity?` (max ${r.capacity}P)`:""}</option>)}
+        {selUnavailable&&selRoom&&<option value={f.room_id}>{selRoom.room_number} ⚠ im Zeitraum belegt</option>}</select>
+        {validRange&&<p className={"text-xs mt-1 "+(availRooms.length?"text-slate-400":"text-rose-600")}>{availRooms.length} von {rooms.length} Zimmern im Zeitraum frei.</p>}
+      </Field>
       <Field label="Belegung (Personen)">
         <input type="number" min="1" max={cap||undefined} className={inputCls} value={f.persons} onChange={e=>u("persons",e.target.value)} placeholder={cap?`max ${cap}`:"Anzahl Personen"}/>
         {cap?<p className={"text-xs mt-1 font-medium "+(pers>=cap?"text-emerald-600":pers>0?"text-amber-600":"text-slate-400")}>{pers?`${pers} von ${cap} Plätzen · ${pers>=cap?"voll belegt":"teilweise belegt"}`:`Zimmer für max. ${cap} Personen`}</p>:null}
       </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Check-in"><input type="date" className={inputCls} value={f.check_in_date} onChange={e=>u("check_in_date",e.target.value)}/></Field>
-        <Field label="Check-out"><input type="date" className={inputCls} value={f.check_out_date} onChange={e=>u("check_out_date",e.target.value)}/></Field>
-      </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Kanal"><select className={inputCls} value={f.contact_channel} onChange={e=>u("contact_channel",e.target.value)}>
           <option value="">—</option><option>WhatsApp</option><option>SMS</option><option>E-Mail</option></select></Field>
@@ -336,7 +353,9 @@ function ResForm({rec,rooms,onSave,onClose}) {
         Vorläufige Reservierung (Anfrage – hält den Platz, noch nicht fest gebucht)
       </label>
       <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
-        <Btn kind="ok" onClick={()=>{ if(!f.guest_name||!f.check_in_date||!f.check_out_date) return toast("Name + Daten nötig","err"); onSave(f); }}>Speichern</Btn></div>
+        <Btn kind="ok" onClick={()=>{ if(!f.guest_name||!f.check_in_date||!f.check_out_date) return toast("Name + Zeitraum nötig","err");
+          if(f.check_in_date>=f.check_out_date) return toast("Check-out muss nach Check-in liegen","err");
+          if(selUnavailable) return toast("Zimmer ist im gewählten Zeitraum belegt","err"); onSave(f); }}>Speichern</Btn></div>
     </Modal>
   );
 }
