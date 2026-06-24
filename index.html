@@ -126,13 +126,12 @@ function useList(loader, deps=[]) {
   useEffect(()=>{ let on=true; (async()=>{ try{ const d=await loader(); if(on)setData(d); }catch(e){ err(e); if(on)setData([]); } })(); return ()=>on=false; },deps);
   return [data,reload];
 }
-const IMMODAY_PROJECTS=[{id:"MÜ-GS6",name:"Gambacher Straße 6, Münzenberg"},{id:"KÖ-FWS17",name:"Friedrich-Winter-Str. 17, Kölschhausen"},{id:"EH-WS20",name:"Wetzlarer Straße 20, Ehringshausen"},{id:"LI-ANH51",name:"Alt Niederhofheim 51, Liederbach"},{id:"AS-HS14",name:"Hauptstraße 14, Aßlar-Werdorf"},{id:"BU-GW15",name:"Gambacher Weg 15, Butzbach"},{id:"LE-GS52",name:"Gorkistraße 52, Leipzig"},{id:"LE-LS51",name:"Löbauer Straße 51, Leipzig"},{id:"RA-LW2A",name:"Lössener Weg 2a, Rackwitz"},{id:"EI-KP7",name:"Karlsplatz 7 (Karlshalle), Eisenach"},{id:"P-SELIG",name:"Baustelle Seligenstadt"},{id:"P-FOERDER",name:"Förderstrategie Sanierung"},{id:"P-AI",name:"AI Automatisierung"},{id:"P-STAMM",name:"immocation STAMMTISCH Frankfurt"}];
 const loaders = {
   rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number").then(r=>r.data||[]),
   roomsMin: ()=> sb.from("rooms").select("id,room_number,capacity").order("room_number").then(r=>r.data||[]),
-  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address,immoday_project_id,inspection_items,wifi_ssid,wifi_password").order("code").then(r=>r.data||[]),
+  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
-  checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, preferred_language, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(name,address))), additional_guests(*)").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
+  checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
@@ -140,6 +139,7 @@ const loaders = {
   settings: ()=> sb.from("settings").select("*").then(r=>r.data||[]),
   issues: ()=> sb.from("guest_issues").select("*").order("created_at",{ascending:false}).then(r=>r.data||[]),
   qonto: ()=> sb.from("qonto_invoices").select("*").order("issue_date",{ascending:false}).then(r=>r.data||[]),
+  pricing: ()=> sb.from("pricing_rules").select("*").then(r=>r.data||[]),
 };
 
 /* ============================ COCKPIT ============================ */
@@ -463,30 +463,10 @@ function CheckIns({bump}) {
   const [rows,reload]=useList(loaders.checkins,[bump]);
   const [q,setQ]=useState("");
   const [sort,setSort]=useState({key:"checked",dir:"desc"});
-  const [idView,setIdView]=useState(null);
   if(!rows) return <Skeleton/>;
   const ql=q.trim().toLowerCase();
   const shown=rows.filter(c=>!ql||[c.full_name,c.email,c.phone,c.reservations?.guest_name].some(v=>(v||"").toLowerCase().includes(ql)));
   const setVideoOk=async(c,ok)=>{ const {error}=await sb.from("check_ins").update({checkout_video_ok:ok,checkout_video_analyzed_at:new Date().toISOString()}).eq("id",c.id); if(error)return err(error); toast(ok?"Video als OK markiert":"Video beanstandet"); reload(); };
-  const viewVideo=async(c)=>{ if(!c.checkout_video_url) return; const {data,error}=await sb.storage.from("checkout-videos").createSignedUrl(c.checkout_video_url,3600); if(error)return err(error); window.open(data.signedUrl,"_blank","noreferrer"); };
-  const wbg=(c)=>{ const r=c.reservations||{}, room=r.rooms||{}, house=room.cleaning_objekte||{};
-    const names=[c.full_name].concat((c.additional_guests||[]).map(g=>g.guest_name).filter(Boolean));
-    const esc=(x)=>(x==null?"":String(x)).replace(/[<>&]/g,m=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[m]));
-    const w=window.open("","_blank"); if(!w){ toast("Popup blockiert — bitte erlauben","err"); return; }
-    const html="<!doctype html><html lang=de><head><meta charset=utf-8><title>Wohnungsgeberbestaetigung</title>"+
-      "<style>body{font-family:Arial,sans-serif;max-width:720px;margin:36px auto;color:#111;line-height:1.5;padding:0 22px}h1{font-size:20px;margin-bottom:2px}.s{font-size:12px;color:#555;margin-top:0}.row{margin:12px 0}.lbl{font-size:11px;color:#555}.val{font-weight:bold;border-bottom:1px solid #999;padding:3px 0;min-height:20px}.sig{margin-top:54px;display:flex;justify-content:space-between}.box{width:46%}@media print{.np{display:none}}</style></head><body>"+
-      "<button class=np onclick=\"window.print()\" style=\"float:right;padding:8px 14px;cursor:pointer\">Drucken</button>"+
-      "<h1>Wohnungsgeberbestaetigung</h1><p class=s>nach \u00a7 19 Bundesmeldegesetz (BMG)</p>"+
-      "<div class=row><div class=lbl>Wohnungsgeber / Vermieter</div><div class=val>JJ Real Estate</div></div>"+
-      "<div class=row><div class=lbl>Anschrift des Wohnungsgebers</div><div class=val>&nbsp;</div></div>"+
-      "<div class=row><div class=lbl>Anschrift der Wohnung (Einzugsobjekt)</div><div class=val>"+esc((house.name?house.name+" \u2014 ":"")+(house.address||room.room_number||""))+"</div></div>"+
-      "<div class=row><div class=lbl>Art des meldepflichtigen Vorgangs</div><div class=val>Einzug</div></div>"+
-      "<div class=row style=\"display:flex;gap:20px\"><div style=\"flex:1\"><div class=lbl>Einzugsdatum</div><div class=val>"+esc(fmt(r.check_in_date))+"</div></div><div style=\"flex:1\"><div class=lbl>Voraussichtlicher Auszug</div><div class=val>"+esc(fmt(r.check_out_date))+"</div></div></div>"+
-      "<div class=row><div class=lbl>Name(n) der meldepflichtigen Person(en)</div><div class=val>"+esc(names.join(", "))+"</div></div>"+
-      "<div class=sig><div class=box><div class=val>&nbsp;</div><div class=lbl>Ort, Datum</div></div><div class=box><div class=val>&nbsp;</div><div class=lbl>Unterschrift Wohnungsgeber</div></div></div>"+
-      "</body></html>";
-    w.document.write(html); w.document.close();
-  };
   const th="text-left p-3 whitespace-nowrap";
   const acc={guest:c=>(c.full_name||"").toLowerCase(),firma:c=>(c.reservations?.guest_name||"").toLowerCase(),room:c=>roomShort(c.reservations?.rooms?.room_number),checked:c=>c.checked_in_at||""};
   const sorted=[...shown].sort((a,b)=>{const f=acc[sort.key];if(!f)return 0;const av=f(a),bv=f(b);return (av<bv?-1:av>bv?1:0)*(sort.dir==="asc"?1:-1);});
@@ -503,12 +483,12 @@ function CheckIns({bump}) {
           <tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
             <td className="p-3 font-semibold text-slate-800">{c.full_name}</td>
             <td className="p-3 text-slate-600">{c.reservations?.guest_name||"—"}</td>
-            <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}{c.reservations?.preferred_language&&<React.Fragment><br/><span className="text-[10px] text-slate-400">Sprache: {c.reservations.preferred_language.toUpperCase()}</span></React.Fragment>}</td>
+            <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}</td>
             <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
             <td className="p-3 text-slate-600">{fmt(c.checked_in_at)}</td>
-            <td className="p-3">{c.id_card_url?<button onClick={()=>setIdView(c)} className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300">Ausweis ansehen</button>:<span className="text-slate-400 text-xs">—</span>}</td>
-            <td className="p-3">{ciDone?<Pill text="✓ abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}<button onClick={()=>wbg(c)} className="block mt-1 text-xs text-blue-600 underline">Wohnungsgeber\u00adbescheinigung</button></td>
-            <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}{c.checkout_video_url&&<button onClick={()=>viewVideo(c)} className="ml-1 text-xs text-blue-600 underline">ansehen</button>}</td>
+            <td className="p-3">{c.id_card_url?<span className="text-emerald-600 text-xs">✓ vorhanden</span>:<span className="text-slate-400 text-xs">—</span>}</td>
+            <td className="p-3">{ciDone?<Pill text="✓ abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
+            <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
             <td className="p-3">{c.checkout_video_ok===true?<Pill text="OK ✓" cls="bg-emerald-100 text-emerald-700"/>
               :c.checkout_video_ok===false?<Pill text="Beanstandet ✗" cls="bg-rose-100 text-rose-700"/>
               :vid?<div className="flex gap-1"><button onClick={()=>setVideoOk(c,true)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold">OK</button><button onClick={()=>setVideoOk(c,false)} className="text-xs px-2 py-1 rounded bg-rose-600 text-white font-semibold">✗</button></div>
@@ -517,7 +497,6 @@ function CheckIns({bump}) {
           {!shown.length&&<tr><td colSpan="9" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
         </tbody></table></Card>
       <p className="text-xs text-slate-400">„Video-Analyse" jetzt manuell (OK/✗) → später automatisch durch die KI-Auswertung; speist die 20 €-Cashback-Freigabe.</p>
-      {idView&&<IdViewModal checkin={idView} onClose={()=>setIdView(null)}/>}
     </div>
   );
 }
@@ -547,76 +526,14 @@ function Extensions({bump}) {
 }
 
 /* ============================ CLEANING ============================ */
-function ObjektForm({rec,onClose,onSaved}){
-  const [f,setF]=useState({code:rec?rec.code||"":"",name:rec?rec.name||"":"",address:rec?rec.address||"":"",immoday_project_id:rec?rec.immoday_project_id||"":"",wifi_ssid:rec?rec.wifi_ssid||"":"",wifi_password:rec?rec.wifi_password||"":""});
-  const [busy,setBusy]=useState(false); const [projects,setProjects]=useState(IMMODAY_PROJECTS);
-  useEffect(()=>{ (async()=>{ try{ let {data}=await sbImmo.rpc("list_projects"); if(!data||!data.length){ const r=await sbImmo.from("projects").select("id,name").order("name"); data=r.data; } if(data&&data.length) setProjects(data.map(p=>({id:p.id,name:p.name}))); }catch(e){} })(); },[]); // eslint-disable-line
-  const u=(k,v)=>setF(x=>({...x,[k]:v}));
-  const save=async()=>{ if(!f.code.trim())return toast("Code nötig","err"); setBusy(true);
-    const payload={code:f.code,name:f.name||null,address:f.address||null,immoday_project_id:f.immoday_project_id||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null};
-    const {error}=rec?await sb.from("cleaning_objekte").update(payload).eq("id",rec.id):await sb.from("cleaning_objekte").insert(payload);
-    setBusy(false); if(error)return err(error); toast(rec?"Objekt gespeichert":"Objekt angelegt"); onSaved&&onSaved(); };
-  return (<Modal title={rec?"Objekt bearbeiten":"Neues Objekt"} onClose={onClose}>
-    <Field label="Code"><input className={inputCls} value={f.code} onChange={e=>u("code",e.target.value)} placeholder="z.B. GS6"/></Field>
-    <Field label="Name"><input className={inputCls} value={f.name} onChange={e=>u("name",e.target.value)}/></Field>
-    <Field label="Adresse"><input className={inputCls} value={f.address} onChange={e=>u("address",e.target.value)}/></Field>
-    <Field label="WLAN-Name (ganzes Haus)"><input className={inputCls} value={f.wifi_ssid} onChange={e=>u("wifi_ssid",e.target.value)}/></Field>
-    <Field label="WLAN-Passwort (ganzes Haus)"><input className={inputCls} value={f.wifi_password} onChange={e=>u("wifi_password",e.target.value)}/></Field>
-    <Field label="Immoday-Projekt"><select className={inputCls} value={f.immoday_project_id} onChange={e=>u("immoday_project_id",e.target.value)}><option value="">— nicht verknüpft —</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}</select></Field>
-    <div className="flex gap-2 mt-2"><Btn onClick={save}>{busy?"…":"Speichern"}</Btn><Btn kind="soft" onClick={onClose}>Abbrechen</Btn></div>
-  </Modal>);
-}
-function NewOrderModal({objekte,rooms,onClose,onSaved}){
-  const [objektId,setObjektId]=useState(""); const [sel,setSel]=useState({});
-  const [bis,setBis]=useState(""); const [kommentar,setKommentar]=useState("");
-  const [busy,setBusy]=useState(false); const [link,setLink]=useState("");
-  const houseRooms=rooms.filter(r=>r.objekt_id===objektId);
-  useEffect(()=>{ const m={}; rooms.filter(r=>r.objekt_id===objektId).forEach(r=>m[r.id]=true); setSel(m); },[objektId]); // eslint-disable-line
-  const create=async()=>{ if(!objektId) return toast("Bitte Haus wählen","err"); if(!bis) return toast("Bitte Frist wählen","err");
-    const items=houseRooms.filter(r=>sel[r.id]).map(r=>({item_id:`room-${r.id}`, item_label:r.room_number}));
-    if(!items.length) return toast("Mind. ein Zimmer wählen","err"); setBusy(true);
-    const {data,error}=await sb.functions.invoke("create-cleaning-order",{body:{objekt_id:objektId, items_to_clean:items, zu_reinigen_bis:new Date(bis).toISOString(), kommentar:kommentar||null}});
-    setBusy(false); if(error||!data||data.error){ return err(error||new Error((data&&data.error)||"Fehler")); }
-    setLink(`https://check-in-rho-bice.vercel.app/cleaning/${data.token}`); toast("Auftrag erstellt"); onSaved&&onSaved(); };
-  return (<Modal title="Neuer Reinigungsauftrag" onClose={onClose}>
-    {link
-      ? <div className="space-y-3">
-          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✓ Auftrag erstellt. Link für die Reinigungskraft:</div>
-          <div className="flex gap-2"><input readOnly value={link} className={inputCls+" !mt-0"}/><Btn onClick={()=>{navigator.clipboard.writeText(link);toast("Link kopiert");}}>Kopieren</Btn></div>
-          <Btn kind="soft" onClick={onClose}>Schließen</Btn></div>
-      : <div>
-          <Field label="Haus / Objekt"><select className={inputCls} value={objektId} onChange={e=>setObjektId(e.target.value)}><option value="">Objekt auswählen…</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code} · {o.name}</option>)}</select></Field>
-          {objektId&&<div className="mb-3"><div className="text-xs text-slate-500 mb-1">Zimmer / Positionen</div>
-            <div className="flex flex-wrap gap-1.5">{houseRooms.map(r=>(<label key={r.id} className={"text-xs px-2 py-1 rounded-lg cursor-pointer border "+(sel[r.id]?"bg-blue-50 border-blue-300 text-blue-700":"border-slate-200 text-slate-500")}><input type="checkbox" className="hidden" checked={!!sel[r.id]} onChange={e=>setSel(x=>({...x,[r.id]:e.target.checked}))}/>{roomShort(r.room_number)}</label>))}{!houseRooms.length&&<span className="text-xs text-slate-400">Keine Zimmer für dieses Haus.</span>}</div></div>}
-          <Field label="Zu reinigen bis"><input type="datetime-local" className={inputCls} value={bis} onChange={e=>setBis(e.target.value)}/></Field>
-          <Field label="Kommentar (optional)"><textarea className={inputCls} rows={3} value={kommentar} onChange={e=>setKommentar(e.target.value)} placeholder="Zusätzliche Hinweise für die Reinigungskraft…"/></Field>
-          <div className="flex gap-2 mt-2"><Btn onClick={create}>{busy?"…":"Auftrag erstellen"}</Btn><Btn kind="soft" onClick={onClose}>Abbrechen</Btn></div>
-        </div>}
-  </Modal>);
-}
-function IdViewModal({checkin,onClose}){
-  const [urls,setUrls]=useState(null);
-  useEffect(()=>{ (async()=>{ const paths=[]; const add=(l,p)=>{ if(p) paths.push({l,p}); };
-    add("Hauptgast — Vorderseite",checkin.id_card_url); add("Hauptgast — Rückseite",checkin.id_card_back_url);
-    (checkin.additional_guests||[]).forEach((g,i)=>{ add((g.guest_name||("Gast "+(i+2)))+" — Vorderseite",g.id_card_front_url); add((g.guest_name||("Gast "+(i+2)))+" — Rückseite",g.id_card_back_url); });
-    const out=[]; for(const it of paths){ const {data}=await sb.storage.from("id-cards").createSignedUrl(it.p,3600); out.push({label:it.l, url:data&&data.signedUrl}); }
-    setUrls(out); })(); },[]); // eslint-disable-line
-  return (<Modal title={"Ausweise · "+(checkin.full_name||"")} onClose={onClose}>
-    {!urls?<Skeleton/>:urls.length?<div className="space-y-3">{urls.map((u,i)=>(<div key={i}><div className="text-xs text-slate-500 mb-1">{u.label}</div>{u.url?<a href={u.url} target="_blank" rel="noreferrer"><img src={u.url} alt="" className="rounded-lg border border-slate-200 max-h-72"/></a>:<span className="text-xs text-slate-400">—</span>}</div>))}</div>:<div className="text-sm text-slate-400">Keine Ausweise hinterlegt.</div>}
-  </Modal>);
-}
 function Cleaning({bump}) {
   const [orders,reloadO]=useList(loaders.orders,[bump]);
   const [reports]=useList(loaders.reports,[bump]);
-  const [objekte,reloadObjekte]=useList(loaders.objekte,[bump]);
+  const [objekte]=useList(loaders.objekte,[bump]);
   const [nuki]=useList(loaders.nuki,[bump]);
-  const [rooms]=useList(loaders.rooms,[bump]);
-  const [showNew,setShowNew]=useState(false);
-  const [editObj,setEditObj]=useState(null);
-  if(!orders||!reports||!objekte||!nuki||!rooms) return <Skeleton/>;
+  if(!orders||!reports||!objekte||!nuki) return <Skeleton/>;
   const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
     if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
-  const delObj=async(o)=>{ if(!confirm("Objekt "+o.code+" löschen?"))return; const {error}=await sb.from("cleaning_objekte").delete().eq("id",o.id); if(error)return err(error); toast("Objekt gelöscht"); reloadObjekte(); };
   return (
     <div className="space-y-6">
       <PageHead title="Reinigung & Häuser" sub="Live aus Supabase."/>
@@ -649,15 +566,14 @@ function Cleaning({bump}) {
         <div className="flex gap-4 text-xs text-slate-400 pt-3"><span><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 align-middle mr-1"></span>letzte</span><span><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 align-middle mr-1"></span>nächste</span><span><span className="inline-block w-3 h-0.5 bg-slate-400 align-middle mr-1"></span>heute</span></div>
       </Card>
       <Card className="p-5">
-        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🧹 Offene Aufträge ({orders.length})</h2><Btn onClick={()=>setShowNew(true)}>+ Neuer Reinigungsauftrag</Btn></div>
-        <div className="space-y-2">{orders.map(o=>{ const link=`https://check-in-rho-bice.vercel.app/cleaning/${o.token}`; return (
+        <h2 className="font-semibold text-slate-800 mb-3">🧹 Offene Aufträge ({orders.length})</h2>
+        <div className="space-y-2">{orders.map(o=>(
           <div key={o.id} className="flex flex-wrap items-center justify-between gap-2 border border-slate-200 rounded-xl px-4 py-3">
             <div><div className="font-medium text-slate-800">{o.cleaning_objekte?.code||"—"} · {Array.isArray(o.items_to_clean)?o.items_to_clean.length:0} Position(en)</div>
               <div className="text-xs text-slate-400">zu reinigen bis: {fmt(o.zu_reinigen_bis)}{o.kommentar?` · ${o.kommentar}`:""}</div></div>
-            <div className="flex gap-2"><Btn kind="soft" size="sm" onClick={()=>{navigator.clipboard.writeText(link);toast("Link kopiert");}}>🔗 Link</Btn><Btn kind="soft" size="sm" onClick={()=>archiveOrder(o)}>Archivieren</Btn></div>
-          </div>);})}
+            <Btn kind="soft" size="sm" onClick={()=>archiveOrder(o)}>Archivieren</Btn>
+          </div>))}
           {!orders.length&&<div className="text-sm text-slate-400">Keine offenen Aufträge.</div>}</div>
-        {showNew&&<NewOrderModal objekte={objekte} rooms={rooms} onClose={()=>setShowNew(false)} onSaved={reloadO}/>}
       </Card>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-3">📋 Reports ({reports.length}, neueste)</h2>
@@ -669,15 +585,12 @@ function Cleaning({bump}) {
           </div>))}</div>
       </Card>
       <Card className="p-5">
-        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🏠 Häuser & Objekte</h2><Btn onClick={()=>setEditObj("new")}>+ Objekt</Btn></div>
-        <div className="grid sm:grid-cols-2 gap-3">{objekte.map(o=>{const lock=nuki.find(n=>(n.lock_name||"").toLowerCase().includes((o.code||"").toLowerCase())); const proj=IMMODAY_PROJECTS.find(p=>p.id===o.immoday_project_id);return(
+        <h2 className="font-semibold text-slate-800 mb-3">🏠 Häuser & Akkus</h2>
+        <div className="grid sm:grid-cols-2 gap-3">{objekte.map(o=>{const lock=nuki.find(n=>(n.lock_name||"").toLowerCase().includes((o.code||"").toLowerCase()));return(
           <div key={o.id} className="border border-slate-200 rounded-xl px-4 py-3">
-            <div className="flex items-start justify-between gap-2"><div><div className="font-medium text-slate-800">{o.code}</div><div className="text-xs text-slate-400">{o.name}{o.address?` · ${o.address}`:""}</div></div>
-              <div className="flex gap-1 shrink-0"><IconBtn title="Bearbeiten" onClick={()=>setEditObj(o)}>✎</IconBtn><IconBtn title="Löschen" color="text-rose-500" onClick={()=>delObj(o)}>🗑</IconBtn></div></div>
-            <div className="text-xs mt-1">{o.immoday_project_id?<span className="text-blue-600">🔗 Immoday: {proj?proj.name:o.immoday_project_id}</span>:<span className="text-slate-400">nicht mit Immoday verknüpft</span>}</div>
+            <div className="font-medium text-slate-800">{o.code}</div><div className="text-xs text-slate-400">{o.name}{o.address?` · ${o.address}`:""}</div>
             {lock&&<div className="text-xs text-slate-500 mt-1">🔋 <Battery v={lock.battery_charge}/> · {lock.lock_name}</div>}
           </div>);})}</div>
-        {editObj&&<ObjektForm rec={editObj==="new"?null:editObj} onClose={()=>setEditObj(null)} onSaved={()=>{setEditObj(null);reloadObjekte();}}/>}
       </Card>
     </div>
   );
@@ -692,23 +605,22 @@ function Occupancy({bump}) {
   const [win,setWin]=useState(12);
   if(!rooms||!res) return <Skeleton/>;
   const roomHouse={}; rooms.forEach(r=>roomHouse[r.id]=r.cleaning_objekte?.code||"—");
-  const roomCap={}; rooms.forEach(r=>roomCap[r.id]=r.capacity||1);
   const now=new Date(); const months=[];
   for(let i=-(win-4);i<4;i++){ const d=new Date(now.getFullYear(),now.getMonth()+i,1); months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }
   const mset=new Set(months);
   const md={}; months.forEach(m=>md[m]={total:0,byHouse:{},byCompany:{}});
   const houses=new Set(), companies=new Set();
   res.forEach(r=>{ if(!r.room_id||!r.check_in_date||!r.check_out_date) return;
-    const house=roomHouse[r.room_id]||"—", comp=r.guest_name||r.code||"—", cap=roomCap[r.room_id]||1; houses.add(house); companies.add(comp);
+    const house=roomHouse[r.room_id]||"—", comp=r.guest_name||r.code||"—"; houses.add(house); companies.add(comp);
     let d=new Date(r.check_in_date); const end=new Date(r.check_out_date); let g=0;
     while(d<end && g<400){ const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
-      if(mset.has(m)){ md[m].total+=cap; md[m].byHouse[house]=(md[m].byHouse[house]||0)+cap; md[m].byCompany[comp]=(md[m].byCompany[comp]||0)+cap; }
+      if(mset.has(m)){ md[m].total++; md[m].byHouse[house]=(md[m].byHouse[house]||0)+1; md[m].byCompany[comp]=(md[m].byCompany[comp]||0)+1; }
       d.setDate(d.getDate()+1); g++; } });
   const srcOf=(m)=> dim==="house"?md[m].byHouse: dim==="company"?md[m].byCompany: null;
-  const bedsTotal=rooms.reduce((a,r)=>a+(r.capacity||1),0);
-  const bedsPerHouse={}; rooms.forEach(r=>{const h=roomHouse[r.id]||"—"; bedsPerHouse[h]=(bedsPerHouse[h]||0)+(r.capacity||1);});
+  const roomsTotal=rooms.length;
+  const roomsPerHouse={}; rooms.forEach(r=>{const h=roomHouse[r.id]||"—"; roomsPerHouse[h]=(roomsPerHouse[h]||0)+1;});
   const daysInMonth=(m)=>{const a=m.split("-"); return new Date(+a[0],+a[1],0).getDate();};
-  const capFor=()=> (dim==="house"&&sel!=="__all__")?(bedsPerHouse[sel]||0):bedsTotal;
+  const capFor=()=> (dim==="house"&&sel!=="__all__")?(roomsPerHouse[sel]||0):roomsTotal;
   const nightsFor=(m)=>{ if(dim==="total") return md[m].total; const s=srcOf(m); return sel==="__all__"?Object.values(s).reduce((a,b)=>a+b,0):(s[sel]||0); };
   // Belegung pro Zimmer: belegte Zimmernächte / verfügbare Zimmernächte (Zimmer × Tage). Alle Zimmer vermietet = 100%.
   const valueFor=(m)=>{ const denom=capFor()*daysInMonth(m); return denom?Math.min(100,Math.round(nightsFor(m)/denom*100)):0; };
@@ -716,25 +628,23 @@ function Occupancy({bump}) {
   const options=dim==="house"?[...houses].sort(): dim==="company"?[...companies].sort():[];
   const breakdown={}; if(dim!=="total"){ months.forEach(m=>{ Object.entries(srcOf(m)).forEach(([k,v])=>breakdown[k]=(breakdown[k]||0)+v); }); }
   const winDays=months.reduce((a,m)=>a+daysInMonth(m),0);
-  const brRows=Object.entries(breakdown).map(([k,nights])=>{const cap=(dim==="house")?(bedsPerHouse[k]||0):bedsTotal;const p=cap&&winDays?Math.min(100,Math.round(nights/(cap*winDays)*100)):0;return [k,nights,p];}).sort((a,b)=>b[2]-a[2]);
+  const brRows=Object.entries(breakdown).map(([k,nights])=>{const cap=(dim==="house")?(roomsPerHouse[k]||0):roomsTotal;const p=cap&&winDays?Math.min(100,Math.round(nights/(cap*winDays)*100)):0;return [k,nights,p];}).sort((a,b)=>b[2]-a[2]);
   const windowTotal=months.reduce((a,m)=>a+md[m].total,0);
-  const totalBeds=bedsTotal;
-  const occBeds=rooms.filter(r=>r.status==="occupied").reduce((a,r)=>a+(r.capacity||1),0);
-  const occ=totalBeds?Math.round(occBeds/totalBeds*100):0;
+  const occ=rooms.length?Math.round(rooms.filter(r=>r.status==="occupied").length/rooms.length*100):0;
   const fmtMonth=(m)=>{const [y,mo]=m.split("-");return new Date(+y,+mo-1,1).toLocaleDateString("de-DE",{month:"short"});};
   const dimBtn=(k,l)=><button key={k} onClick={()=>{setDim(k);setSel("__all__");}} className={"px-3 py-1.5 rounded-lg text-xs font-semibold "+(dim===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>;
   return (
     <div className="space-y-6">
-      <PageHead title="Auslastung & Umsatz" sub="Belegung = belegte Betten / Bettenkapazität. Umsatz folgt mit Qonto."/>
+      <PageHead title="Auslastung & Umsatz" sub="Belegung pro Zimmer (%) — alle Zimmer vermietet = 100%. Umsatz folgt mit Qonto."/>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung heute (Betten)</div></Card>
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occBeds}<span className="text-lg text-slate-400">/{totalBeds}</span></div><div className="text-sm text-slate-500">belegte Betten</div></Card>
-        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{windowTotal}</div><div className="text-sm text-slate-500">Bettennächte (12 Mon.)</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{occ}%</div><div className="text-sm text-slate-500">Belegung heute</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{rooms.filter(r=>r.status==="occupied").length}</div><div className="text-sm text-slate-500">belegte Zimmer</div></Card>
+        <Card className="p-5"><div className="text-3xl font-bold text-slate-800">{windowTotal}</div><div className="text-sm text-slate-500">Zimmernächte (12 Mon.)</div></Card>
         <Card className="p-5"><div className="text-3xl font-bold text-slate-400">€ —</div><div className="text-sm text-slate-500">Umsatz (Qonto folgt)</div></Card>
       </div>
       <Card className="p-5">
         <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
-          <h2 className="font-semibold text-slate-800">Belegung pro Monat (Betten %)</h2>
+          <h2 className="font-semibold text-slate-800">Belegung pro Monat (%)</h2>
           <div className="flex items-center gap-2 flex-wrap">
             <select value={win} onChange={e=>setWin(+e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs"><option value={6}>6 Mon.</option><option value={12}>12 Mon.</option><option value={24}>24 Mon.</option></select>
             <div className="flex gap-1">{dimBtn("total","Gesamt")}{dimBtn("house","Nach Haus")}{dimBtn("company","Nach Firma")}</div>
@@ -813,631 +723,103 @@ function SettingsView({onLogout,email,bump}) {
 }
 
 /* ============================ GUEST PORTAL ============================ */
-/* ============================ GAST — CHECK-IN-WIZARD ============================ */
-/* Reworked per CHECKIN_flow_alt-app.md: 6-step wizard, multi-person IDs, smoking
-   highlight, cashback step, in-app platform CTA (no WhatsApp), success card with
-   room PIN / door code / address / intro video, auto confirmation e-mail.        */
-const LANGS = ["de","en","cs","sk","ru"];
-const TR = {
-  de:{ appTitle:"Monteur Check-In", appSub:"Zugang zu deinem Zimmer", code:"Reservierungscode", codePh:"z.B. MD38K2",
-    cont:"Weiter", back:"Zurück", admin:"Admin-Login", otherCode:"← anderer Code", step:"Schritt", of:"von",
-    sPersonal:"Daten", sId:"Ausweise", sRules:"Hausordnung", sComm:"Abschluss", sDone:"Fertig",
-    welcome:"Willkommen", stayFrom:"Aufenthalt", persons:"Personen",
-    pHead:"Persönliche Daten", pNote:"Bitte genau wie auf dem Ausweis angeben.",
-    name:"Vollständiger Name", email:"E-Mail", phone:"Telefon", reqAll:"Bitte alle Felder ausfüllen.",
-    idHead:"Identität bestätigen", idNote:"Ein Ausweis pro Person — Vorder- und Rückseite.",
-    person:"Person", front:"Vorderseite", back:"Rückseite", upFront:"⬆ Vorderseite", upBack:"⬆ Rückseite",
-    uploaded:"hochgeladen", both:"✓ Beide Seiten hochgeladen", uploading:"lädt…", guestName:"Name dieser Person",
-    addGuest:"+ Weiteren Gast hinzufügen", removeGuest:"Entfernen", needBoth:"Bitte für jede Person Vorder- und Rückseite hochladen.",
-    sameId:"⚠️ Für zwei Personen wurde dasselbe Foto hochgeladen. Bitte den echten Ausweis jeder Person fotografieren.",
-    rulesHead:"Hausordnung", noSmokeT:"RAUCHEN VERBOTEN", noSmokeS:"In allen Innenräumen ist Rauchen strengstens untersagt.",
-    agreeRules:"Ich habe die Hausordnung gelesen und stimme zu.", accept:"Akzeptieren & Weiter", mustAgree:"Bitte der Hausordnung zustimmen.",
-    commHead:"Fast geschafft", cashT:"20 € Cashback fürs Checkout-Video",
-    cashS:"Lade beim Auszug ein kurzes Video hoch — bei sauberem Zustand bekommst du 20 € zurück.",
-    cashShow:"Das muss im Video zu sehen sein:", agreeVideo:"Ich nehme vor der Abreise ein kurzes Checkout-Video auf.",
-    platT:"Unsere Kommunikations-Plattform", platS:"Fragen, Probleme & Infos laufen ab jetzt direkt in der App — kein WhatsApp mehr.",
-    openPlat:"Plattform öffnen", installHint:"📲 Tipp: über das Browser-Menü „Zum Home-Bildschirm hinzufügen“ hast du alles griffbereit.",
-    finish:"Check-In abschließen", saving:"speichert…",
-    okHead:"Check-In erfolgreich!", okSub:"Willkommen — hier sind deine Zugangsdaten.",
-    room:"Zimmer", roomPin:"Zimmer-Code", houseCode:"Haustür-Code", address:"Adresse", wifi:"WLAN", wifiPw:"WLAN-Passwort",
-    introT:"🎬 Wie komme ich in mein Zimmer?", introBtn:"▶ Lage & Weg zum Zimmer", doorBtn:"▶ Tür- & Wegbeschreibung", videoSoon:"Video folgt.",
-    photosT:"📷 Dein Zimmer", extendT:"Aufenthalt verlängern?", extendNow:"Auszug aktuell:", extendBtn:"+ Verlängerung anfragen",
-    problemT:"🛠 Problem melden", cat:"Kategorie wählen…", problemPh:"Was ist das Problem?", send:"Senden",
-    problemOk:"✓ Danke! Deine Meldung ist eingegangen.", more:"Weitere melden", problemNeed:"Bitte Problem beschreiben.",
-    msgTitle:"Nachrichten & Hilfe", msgEmpty:"Noch keine Nachrichten – schreib uns hier.", msgPlaceholder:"Nachricht ans Team…", msgSend:"Senden", attach:"Anhang", houseChatTitle:"Haus-Chat", houseChatEmpty:"Noch keine Nachrichten im Haus – schreib etwas.", houseChatPh:"Nachricht an Haus & Team…",
-    coTitle:"Checkout-Video", coSub:"Lade dein Auszugs-Video hoch \u2013 20 \u20ac zur\u00fcck, wenn alles sauber ist.", coShow:"Das muss im Video zu sehen sein:", coUpload:"\ud83c\udfa5 Video aufnehmen / hochladen", coUploading:"l\u00e4dt\u2026", coThanks:"\u2705 Danke! Dein Video ist eingegangen \u2013 wird gepr\u00fcft, bei sauberem Zustand 20 \u20ac zur\u00fcck.", coBadToken:"Link ung\u00fcltig oder abgelaufen." },
-  en:{ appTitle:"Worker Check-In", appSub:"Access to your room", code:"Reservation code", codePh:"e.g. MD38K2",
-    cont:"Continue", back:"Back", admin:"Admin login", otherCode:"← different code", step:"Step", of:"of",
-    sPersonal:"Details", sId:"ID cards", sRules:"House rules", sComm:"Finish", sDone:"Done",
-    welcome:"Welcome", stayFrom:"Stay", persons:"Guests",
-    pHead:"Personal details", pNote:"Please enter exactly as on your ID.",
-    name:"Full name", email:"E-mail", phone:"Phone", reqAll:"Please fill in all fields.",
-    idHead:"Confirm identity", idNote:"One ID per person — front and back.",
-    person:"Person", front:"Front", back:"Back", upFront:"⬆ Front", upBack:"⬆ Back",
-    uploaded:"uploaded", both:"✓ Both sides uploaded", uploading:"uploading…", guestName:"Name of this person",
-    addGuest:"+ Add another guest", removeGuest:"Remove", needBoth:"Please upload front and back for every person.",
-    sameId:"⚠️ The same photo was uploaded for two people. Please photograph each person's real ID.",
-    rulesHead:"House rules", noSmokeT:"NO SMOKING", noSmokeS:"Smoking is strictly forbidden in all indoor areas.",
-    agreeRules:"I have read and agree to the house rules.", accept:"Accept & continue", mustAgree:"Please accept the house rules.",
-    commHead:"Almost done", cashT:"€20 cashback for the checkout video",
-    cashS:"Upload a short video when you leave — if everything is clean you get €20 back.",
-    cashShow:"This must be visible in the video:", agreeVideo:"I will record a short checkout video before leaving.",
-    platT:"Our communication platform", platS:"Questions, problems & info now go straight through the app — no more WhatsApp.",
-    openPlat:"Open platform", installHint:"📲 Tip: use the browser menu “Add to Home Screen” to keep it handy.",
-    finish:"Complete check-in", saving:"saving…",
-    okHead:"Check-in complete!", okSub:"Welcome — here are your access details.",
-    room:"Room", roomPin:"Room code", houseCode:"Front-door code", address:"Address", wifi:"Wi-Fi", wifiPw:"Wi-Fi password",
-    introT:"🎬 How do I get to my room?", introBtn:"▶ Location & way to room", doorBtn:"▶ Door & directions", videoSoon:"Video coming soon.",
-    photosT:"📷 Your room", extendT:"Extend your stay?", extendNow:"Current checkout:", extendBtn:"+ Request extension",
-    problemT:"🛠 Report a problem", cat:"Choose category…", problemPh:"What is the problem?", send:"Send",
-    problemOk:"✓ Thanks! Your report was received.", more:"Report another", problemNeed:"Please describe the problem.",
-    msgTitle:"Messages & help", msgEmpty:"No messages yet – write to us here.", msgPlaceholder:"Message to the team…", msgSend:"Send", attach:"Attachment", houseChatTitle:"House chat", houseChatEmpty:"No messages yet – post something.", houseChatPh:"Message to house & team…",
-    coTitle:"Checkout video", coSub:"Upload your move-out video \u2013 \u20ac20 back if everything is clean.", coShow:"This must be visible in the video:", coUpload:"\ud83c\udfa5 Record / upload video", coUploading:"uploading\u2026", coThanks:"\u2705 Thanks! Your video was received \u2013 it will be reviewed; \u20ac20 back if clean.", coBadToken:"Link invalid or expired." },
-  cs:{ appTitle:"Check-In pro ubytované", appSub:"Přístup do vašeho pokoje", code:"Rezervační kód", codePh:"např. MD38K2",
-    cont:"Pokračovat", back:"Zpět", admin:"Přihlášení admin", otherCode:"← jiný kód", step:"Krok", of:"z",
-    sPersonal:"Údaje", sId:"Doklady", sRules:"Domovní řád", sComm:"Dokončení", sDone:"Hotovo",
-    welcome:"Vítejte", stayFrom:"Pobyt", persons:"Osoby",
-    pHead:"Osobní údaje", pNote:"Zadejte přesně jako na dokladu.",
-    name:"Celé jméno", email:"E-mail", phone:"Telefon", reqAll:"Vyplňte prosím všechna pole.",
-    idHead:"Potvrzení totožnosti", idNote:"Jeden doklad na osobu — přední a zadní strana.",
-    person:"Osoba", front:"Přední", back:"Zadní", upFront:"⬆ Přední strana", upBack:"⬆ Zadní strana",
-    uploaded:"nahráno", both:"✓ Obě strany nahrány", uploading:"nahrávání…", guestName:"Jméno této osoby",
-    addGuest:"+ Přidat další osobu", removeGuest:"Odebrat", needBoth:"Nahrajte prosím přední i zadní stranu pro každou osobu.",
-    sameId:"⚠️ Pro dvě osoby byla nahrána stejná fotka. Vyfoťte prosím skutečný doklad každé osoby.",
-    rulesHead:"Domovní řád", noSmokeT:"ZÁKAZ KOUŘENÍ", noSmokeS:"Kouření je ve všech vnitřních prostorách přísně zakázáno.",
-    agreeRules:"Přečetl/a jsem domovní řád a souhlasím.", accept:"Souhlasím a pokračovat", mustAgree:"Potvrďte prosím domovní řád.",
-    commHead:"Téměř hotovo", cashT:"20 € zpět za video při odjezdu",
-    cashS:"Při odjezdu nahrajte krátké video — když je vše čisté, dostanete 20 € zpět.",
-    cashShow:"Na videu musí být vidět:", agreeVideo:"Před odjezdem natočím krátké video.",
-    platT:"Naše komunikační platforma", platS:"Dotazy, problémy a informace nyní řešíte přímo v aplikaci — žádný WhatsApp.",
-    openPlat:"Otevřít platformu", installHint:"📲 Tip: přes menu prohlížeče „Přidat na plochu“ máte vše po ruce.",
-    finish:"Dokončit check-in", saving:"ukládání…",
-    okHead:"Check-in dokončen!", okSub:"Vítejte — zde jsou vaše přístupové údaje.",
-    room:"Pokoj", roomPin:"Kód pokoje", houseCode:"Kód vchodu", address:"Adresa", wifi:"Wi-Fi", wifiPw:"Heslo Wi-Fi",
-    introT:"🎬 Jak se dostanu do pokoje?", introBtn:"▶ Poloha a cesta k pokoji", doorBtn:"▶ Dveře a cesta", videoSoon:"Video bude doplněno.",
-    photosT:"📷 Váš pokoj", extendT:"Prodloužit pobyt?", extendNow:"Aktuální odjezd:", extendBtn:"+ Požádat o prodloužení",
-    problemT:"🛠 Nahlásit problém", cat:"Vyberte kategorii…", problemPh:"V čem je problém?", send:"Odeslat",
-    problemOk:"✓ Děkujeme! Vaše hlášení bylo přijato.", more:"Nahlásit další", problemNeed:"Popište prosím problém." },
-  sk:{ appTitle:"Check-In pre ubytovaných", appSub:"Prístup do vašej izby", code:"Rezervačný kód", codePh:"napr. MD38K2",
-    cont:"Pokračovať", back:"Späť", admin:"Prihlásenie admin", otherCode:"← iný kód", step:"Krok", of:"z",
-    sPersonal:"Údaje", sId:"Doklady", sRules:"Domový poriadok", sComm:"Dokončenie", sDone:"Hotovo",
-    welcome:"Vitajte", stayFrom:"Pobyt", persons:"Osoby",
-    pHead:"Osobné údaje", pNote:"Zadajte presne ako na doklade.",
-    name:"Celé meno", email:"E-mail", phone:"Telefón", reqAll:"Vyplňte prosím všetky polia.",
-    idHead:"Potvrdenie totožnosti", idNote:"Jeden doklad na osobu — predná a zadná strana.",
-    person:"Osoba", front:"Predná", back:"Zadná", upFront:"⬆ Predná strana", upBack:"⬆ Zadná strana",
-    uploaded:"nahraté", both:"✓ Obe strany nahraté", uploading:"nahráva sa…", guestName:"Meno tejto osoby",
-    addGuest:"+ Pridať ďalšieho hosťa", removeGuest:"Odstrániť", needBoth:"Nahrajte prosím prednú aj zadnú stranu pre každú osobu.",
-    sameId:"⚠️ Pre dve osoby bola nahratá rovnaká fotka. Odfoťte prosím skutočný doklad každej osoby.",
-    rulesHead:"Domový poriadok", noSmokeT:"ZÁKAZ FAJČENIA", noSmokeS:"Fajčenie je vo všetkých vnútorných priestoroch prísne zakázané.",
-    agreeRules:"Prečítal/a som domový poriadok a súhlasím.", accept:"Súhlasím a pokračovať", mustAgree:"Potvrďte prosím domový poriadok.",
-    commHead:"Takmer hotovo", cashT:"20 € späť za video pri odchode",
-    cashS:"Pri odchode nahrajte krátke video — ak je všetko čisté, dostanete 20 € späť.",
-    cashShow:"Na videu musí byť vidieť:", agreeVideo:"Pred odchodom natočím krátke video.",
-    platT:"Naša komunikačná platforma", platS:"Otázky, problémy a informácie teraz riešite priamo v aplikácii — žiadny WhatsApp.",
-    openPlat:"Otvoriť platformu", installHint:"📲 Tip: cez menu prehliadača „Pridať na plochu“ máte všetko poruke.",
-    finish:"Dokončiť check-in", saving:"ukladá sa…",
-    okHead:"Check-in dokončený!", okSub:"Vitajte — tu sú vaše prístupové údaje.",
-    room:"Izba", roomPin:"Kód izby", houseCode:"Kód vchodu", address:"Adresa", wifi:"Wi-Fi", wifiPw:"Heslo Wi-Fi",
-    introT:"🎬 Ako sa dostanem do izby?", introBtn:"▶ Poloha a cesta k izbe", doorBtn:"▶ Dvere a cesta", videoSoon:"Video bude doplnené.",
-    photosT:"📷 Vaša izba", extendT:"Predĺžiť pobyt?", extendNow:"Aktuálny odchod:", extendBtn:"+ Požiadať o predĺženie",
-    problemT:"🛠 Nahlásiť problém", cat:"Vyberte kategóriu…", problemPh:"V čom je problém?", send:"Odoslať",
-    problemOk:"✓ Ďakujeme! Vaše hlásenie bolo prijaté.", more:"Nahlásiť ďalší", problemNeed:"Opíšte prosím problém." },
-  ru:{ appTitle:"Заселение", appSub:"Доступ в вашу комнату", code:"Код брони", codePh:"напр. MD38K2",
-    cont:"Далее", back:"Назад", admin:"Вход для админа", otherCode:"← другой код", step:"Шаг", of:"из",
-    sPersonal:"Данные", sId:"Документы", sRules:"Правила", sComm:"Завершение", sDone:"Готово",
-    welcome:"Добро пожаловать", stayFrom:"Проживание", persons:"Гости",
-    pHead:"Личные данные", pNote:"Укажите точно как в документе.",
-    name:"Полное имя", email:"E-mail", phone:"Телефон", reqAll:"Пожалуйста, заполните все поля.",
-    idHead:"Подтверждение личности", idNote:"Один документ на человека — лицевая и обратная сторона.",
-    person:"Человек", front:"Лицевая", back:"Обратная", upFront:"⬆ Лицевая сторона", upBack:"⬆ Обратная сторона",
-    uploaded:"загружено", both:"✓ Обе стороны загружены", uploading:"загрузка…", guestName:"Имя этого человека",
-    addGuest:"+ Добавить ещё гостя", removeGuest:"Удалить", needBoth:"Загрузите лицевую и обратную сторону для каждого человека.",
-    sameId:"⚠️ Для двух человек загружено одно и то же фото. Сфотографируйте реальный документ каждого.",
-    rulesHead:"Правила проживания", noSmokeT:"КУРЕНИЕ ЗАПРЕЩЕНО", noSmokeS:"Курение во всех помещениях строго запрещено.",
-    agreeRules:"Я прочитал(а) правила и согласен(на).", accept:"Принять и продолжить", mustAgree:"Пожалуйста, примите правила.",
-    commHead:"Почти готово", cashT:"20 € кэшбэк за видео при выезде",
-    cashS:"При выезде загрузите короткое видео — если всё чисто, вернём 20 €.",
-    cashShow:"На видео должно быть видно:", agreeVideo:"Я запишу короткое видео перед выездом.",
-    platT:"Наша платформа для связи", platS:"Вопросы, проблемы и новости теперь прямо в приложении — без WhatsApp.",
-    openPlat:"Открыть платформу", installHint:"📲 Совет: через меню браузера «На главный экран» всё под рукой.",
-    finish:"Завершить заселение", saving:"сохранение…",
-    okHead:"Заселение завершено!", okSub:"Добро пожаловать — вот ваши данные для доступа.",
-    room:"Комната", roomPin:"Код комнаты", houseCode:"Код подъезда", address:"Адрес", wifi:"Wi-Fi", wifiPw:"Пароль Wi-Fi",
-    introT:"🎬 Как пройти в комнату?", introBtn:"▶ Расположение и путь", doorBtn:"▶ Дверь и маршрут", videoSoon:"Видео скоро будет.",
-    photosT:"📷 Ваша комната", extendT:"Продлить проживание?", extendNow:"Текущий выезд:", extendBtn:"+ Запросить продление",
-    problemT:"🛠 Сообщить о проблеме", cat:"Выберите категорию…", problemPh:"В чём проблема?", send:"Отправить",
-    problemOk:"✓ Спасибо! Ваше сообщение получено.", more:"Сообщить ещё", problemNeed:"Опишите проблему." },
-};
-
-async function fileSha(file){ try{ const buf=await file.arrayBuffer(); const h=await crypto.subtle.digest("SHA-256",buf);
-  return Array.from(new Uint8Array(h)).map(b=>b.toString(16).padStart(2,"0")).join(""); }catch(e){ return null; } }
-const genToken=()=>Array.from({length:24},()=>"abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random()*36)]).join("");
-
-function LangBar({glang,setGlang}){ return (
-  <div className="flex gap-1 justify-center">{LANGS.map(l=>
-    <button key={l} onClick={()=>setGlang(l)} className={"text-xs px-2.5 py-1 rounded font-semibold "+(glang===l?"bg-blue-600 text-white":"bg-slate-100 text-slate-500")}>{l.toUpperCase()}</button>)}</div>
-); }
-
-function Guest({onAdmin}){
-  const urlCode = (()=>{ try{ return (new URLSearchParams(window.location.search).get("code")||"").toUpperCase(); }catch(e){ return ""; } })();
-  const [code,setCode]=useState(urlCode);
-  const [glang,setGlang]=useState("de");
-  const [booking,setBooking]=useState(null);
-  const [busy,setBusy]=useState(false);
-  const [step,setStep]=useState("code");          // code → personal → id → rules → comm → success
-  const [hr,setHr]=useState([]); const [platUrl,setPlatUrl]=useState("");
-  const [pdata,setPdata]=useState({full_name:"",email:"",phone:""});
-  const [guests,setGuests]=useState([{name:"",front:null,back:null,fhash:null,busyF:false,busyB:false}]);
-  const [agreeRules,setAgreeRules]=useState(false);
-  const [vidConsent,setVidConsent]=useState(true);
+function Guest({onAdmin}) {
+  const [code,setCode]=useState(""),[booking,setBooking]=useState(null),[busy,setBusy]=useState(false);
+  const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
+  const [phase,setPhase]=useState("idle"),[detected,setDetected]=useState({});
+  const [hr,setHr]=useState([]); const [glang,setGlang]=useState("de");
   const [issue,setIssue]=useState({category:"",message:""}); const [issueSent,setIssueSent]=useState(false);
-  const [thr,setThr]=useState({on:false,company:null,thread:null,msgs:[],body:"",pendingPhoto:null,busy:false,loaded:false});
-  const [hthr,setHthr]=useState({on:false,house:null,thread:null,msgs:[],body:"",pendingPhoto:null,busy:false,loaded:false});
-  const t=(k)=> (TR[glang]&&TR[glang][k]) || TR.en[k] || k;
-
-  useEffect(()=>{ sb.from("settings").select("key,value").in("key",["house_rules","platform_url"]).then(({data})=>{
-    (data||[]).forEach(row=>{ if(row.key==="house_rules"&&Array.isArray(row.value)) setHr(row.value);
-      if(row.key==="platform_url") setPlatUrl(typeof row.value==="string"?row.value:(row.value&&row.value.url)||""); }); }); },[]);
-  useEffect(()=>{ if(urlCode){ lookup(urlCode); } /* prefill from e-mail link */ },[]); // eslint-disable-line
-  useEffect(()=>{ if(step==="success"&&booking){ loadThread(); loadHouseThread(); } },[step, booking&&booking.id]); // eslint-disable-line
-
-  async function lookup(forced){ const c=(forced||code||"").trim().toUpperCase(); if(!c){ return; } setBusy(true);
-    // anon-Tabellen sind dicht → Lookup über SECURITY DEFINER RPC (Jean), nach Reservierungscode gescoped
-    const {data,error}=await sb.rpc("get_checkin_reservation",{p_code:c});
-    if(error||!data||data.error||!data.reservation){ setBusy(false); toast("Code nicht gefunden / code not found","err"); return; }
-    const resv=data.reservation;
-    const booking={...resv, rooms:{...(data.room||{}), cleaning_objekte:data.objekt||null}}; // shape wie zuvor, Rest der UI unverändert
-    setBooking(booking); if(resv.preferred_language) setGlang(resv.preferred_language);
-    setPdata(p=>({...p, full_name:resv.guest_name||"", email:resv.guest_email||""}));
-    const n=Math.max(1, resv.persons||1);
-    setGuests(g=>{ const arr=[...g]; while(arr.length<n) arr.push({name:"",front:null,back:null,fhash:null,busyF:false,busyB:false}); return arr.slice(0,Math.max(n,arr.length)); });
-    setBusy(false); setStep(data.has_checkin ? "success" : "personal");
-  }
-  const room=(booking&&booking.rooms)||{};
-  const house=room.cleaning_objekte||{};
-  const addr=house.address||"";
-
-  // ---- ID upload ----
-  async function uploadId(file, gi, side){ if(!file||!booking) return;
-    setGuests(g=>g.map((x,i)=>i===gi?{...x,[side==="front"?"busyF":"busyB"]:true}:x));
-    const ext=((file.name||"").split(".").pop()||"jpg").toLowerCase();
-    const path=`${booking.id}/p${gi+1}-${side}-${Date.now()}.${ext}`;
-    const {error}=await sb.storage.from("id-cards").upload(path,file,{upsert:true,contentType:file.type||"image/jpeg"});
-    if(error){ err(error); setGuests(g=>g.map((x,i)=>i===gi?{...x,busyF:false,busyB:false}:x)); return; }
-    let fhash=null; if(side==="front") fhash=await fileSha(file);
-    setGuests(g=>g.map((x,i)=>i===gi?{...x,[side]:path,...(side==="front"?{fhash}:{}),busyF:false,busyB:false}:x));
-  }
-  const dupId=(()=>{ const seen={}; for(const g of guests){ if(g.fhash){ if(seen[g.fhash]) return true; seen[g.fhash]=1; } } return false; })();
-  const allIdsDone=guests.every(g=>g.front&&g.back) && !dupId;
-
-  function addGuest(){ setGuests(g=>[...g,{name:"",front:null,back:null,fhash:null,busyF:false,busyB:false}]); }
-  function removeGuest(i){ setGuests(g=>g.filter((_,k)=>k!==i)); }
-
-  // ---- finish ----
-  async function finish(){ if(busy) return; setBusy(true);
-    try{
-      const token=genToken();
-      const {data:ci,error}=await sb.from("check_ins").insert({
-        reservation_id:booking.id, full_name:pdata.full_name, email:pdata.email, phone:pdata.phone,
-        id_card_url:guests[0].front, id_card_back_url:guests[0].back,
-        agreed_to_rules:true, agreed_to_checkout_video:!!vidConsent, checkout_token:token
-      }).select("id").single();
-      if(error) throw error;
-      const extra=guests.slice(1).filter(g=>g.front||g.back||g.name);
-      if(extra.length){ const {error:e2}=await sb.from("additional_guests").insert(
-        extra.map(g=>({check_in_id:ci.id, guest_name:g.name||"—", id_card_front_url:g.front, id_card_back_url:g.back}))); if(e2) err(e2); }
-      await sb.rpc("update_reservation_checkin",{ p_code:booking.code, p_language:glang,
-        p_persons:booking.persons||guests.length, p_is_used:true }); // anon-Tabellen dicht → RPC (Jean)
-      // confirmation e-mail (localised) — backend send-email edge function
-      try{ await sb.functions.invoke("send-email",{ body:{ to:pdata.email, subject:"Check-In", template:"checkin_confirmation", language:glang,
-        data:{ guestName:pdata.full_name, roomNumber:roomShort(room.room_number), houseAddress:addr||house.name||"",
-          doorCode:room.door_code, houseDoorCode:room.house_door_code, checkInDate:booking.check_in_date, checkOutDate:booking.check_out_date } } }); }catch(e){ console.warn("email",e); }
-      setBusy(false); setStep("success");
-    }catch(e){ setBusy(false); err(e); }
-  }
-
-  const sendIssue=async()=>{ if(!issue.message.trim()) return toast(t("problemNeed"),"err");
-    const {error}=await sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:issue.category||null,message:issue.message});
-    if(error) return err(error); setIssueSent(true); setIssue({category:"",message:""}); toast(t("problemOk")); };
-
-  const openPlatform=()=>{ if(platUrl){ window.open(platUrl,"_blank","noreferrer"); } else { toast(t("installHint")); } };
-  const reset=()=>{ setBooking(null); setCode(""); setStep("code"); setGuests([{name:"",front:null,back:null,fhash:null,busyF:false,busyB:false}]); setAgreeRules(false); };
-  // ---- Phase C: Firmen-Kanal · Variante A (SECURITY DEFINER RPCs, anon-Tabellen dicht) ----
-  // get_company_channel(p_code) -> { company, thread, messages }   ·   post_company_message(p_code,p_body,p_attachment)
-  async function loadThread(){
-    try{
-      const {data,error}=await sb.rpc("get_company_channel",{p_code:booking.code});
-      if(error||!data){ setThr(s=>({...s,on:false,loaded:true})); return; }
-      const r=Array.isArray(data)?(data[0]||{}):data;
-      const company=r.company||null;
-      if(!company){ setThr(s=>({...s,on:false,loaded:true})); return; }
-      setThr(s=>({...s,on:true,company,thread:r.thread||null,msgs:Array.isArray(r.messages)?r.messages:[],loaded:true}));
-    }catch(e){ setThr(s=>({...s,on:false,loaded:true})); }
-  }
-  async function attachPhoto(file){ if(!file) return; setThr(s=>({...s,busy:true}));
-    const ext=((file.name||"").split(".").pop()||"jpg").toLowerCase();
-    const path=`${booking.id}/${Date.now()}.${ext}`;                 // anon INSERT in guest-uploads; auth-only read
-    const {error}=await sb.storage.from("guest-uploads").upload(path,file,{upsert:true,contentType:file.type||"image/jpeg"});
-    if(error){ err(error); setThr(s=>({...s,busy:false})); return; }
-    setThr(s=>({...s,pendingPhoto:path,busy:false})); toast(t("attach")+" ✓");
-  }
-  async function sendMsg(){ if((!thr.body.trim()&&!thr.pendingPhoto)) return; setThr(s=>({...s,busy:true}));
-    try{ const {error}=await sb.rpc("post_company_message",{p_code:booking.code, p_body:thr.body||"", p_attachment:thr.pendingPhoto||null});
-      if(error) throw error;
-      setThr(s=>({...s,body:"",pendingPhoto:null,busy:false})); loadThread();
-    }catch(e){ err(e); setThr(s=>({...s,busy:false})); }
-  }
-  // ---- Haus-Kanal (fail-soft; RPCs get_house_channel / post_house_message) ----
-  async function loadHouseThread(){
-    try{ const {data,error}=await sb.rpc("get_house_channel",{p_code:booking.code});
-      if(error||!data){ setHthr(s=>({...s,on:false,loaded:true})); return; }
-      const r=Array.isArray(data)?(data[0]||{}):data; const house=r.house||null;
-      if(!house){ setHthr(s=>({...s,on:false,loaded:true})); return; }
-      setHthr(s=>({...s,on:true,house,thread:r.thread||null,msgs:Array.isArray(r.messages)?r.messages:[],loaded:true}));
-    }catch(e){ setHthr(s=>({...s,on:false,loaded:true})); }
-  }
-  async function attachHousePhoto(file){ if(!file) return; setHthr(s=>({...s,busy:true}));
-    const ext=((file.name||"").split(".").pop()||"jpg").toLowerCase(); const path=`${booking.id}/house-${Date.now()}.${ext}`;
-    const {error}=await sb.storage.from("guest-uploads").upload(path,file,{upsert:true,contentType:file.type||"image/jpeg"});
-    if(error){ err(error); setHthr(s=>({...s,busy:false})); return; }
-    setHthr(s=>({...s,pendingPhoto:path,busy:false})); toast(t("attach")+" ✓");
-  }
-  async function sendHouseMsg(){ if((!hthr.body.trim()&&!hthr.pendingPhoto)) return; setHthr(s=>({...s,busy:true}));
-    try{ const {error}=await sb.rpc("post_house_message",{p_code:booking.code, p_body:hthr.body||"", p_attachment:hthr.pendingPhoto||null});
-      if(error) throw error; setHthr(s=>({...s,body:"",pendingPhoto:null,busy:false})); loadHouseThread();
-    }catch(e){ err(e); setHthr(s=>({...s,busy:false})); }
-  }
-  /* ---------------- STEP: CODE ---------------- */
-  if(step==="code"){ return (
-    <div className="min-h-screen flex items-center justify-center p-4"><div className="w-full max-w-sm">
-      <div className="bg-slate-900 rounded-t-3xl p-6 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🏠</div>
-        <h2 className="text-white font-bold text-xl mt-3">{t("appTitle")}</h2><p className="text-slate-400 text-sm">{t("appSub")}</p>
-        <div className="mt-4"><LangBar glang={glang} setGlang={setGlang}/></div>
+  useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
+  const lookup=async()=>{ if(!code.trim())return; setBusy(true);
+    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link,photos,intro_video_url)").eq("code",code.trim().toUpperCase()).maybeSingle();
+    setBusy(false); if(error||!data){ toast("Code nicht gefunden","err"); return; } setBooking(data); setGlang(data.preferred_language||"de"); };
+  const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
+    if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
+  const missing=ELEMENTS.filter(e=>detected[e]===false);
+  if(!booking) return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="bg-slate-900 rounded-t-3xl p-6 text-center"><div className="w-14 h-14 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🏠</div>
+          <h2 className="text-white font-bold text-xl mt-3">Monteur Check-In</h2><p className="text-slate-400 text-sm">Zugang zu deinem Zimmer</p></div>
+        <div className="bg-white rounded-b-3xl p-6 shadow-lg">
+          <Field label="Reservierungscode"><input className={inputCls+" text-center font-mono uppercase"} value={code} onChange={e=>setCode(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&lookup()} placeholder="z.B. M79DGU"/></Field>
+          <Btn onClick={lookup} size="lg">{busy?"…":"→ Weiter"}</Btn>
+          <div className="text-center mt-4 pt-4 border-t border-slate-100"><button onClick={onAdmin} className="text-xs text-slate-400">Admin-Login</button></div>
+        </div>
       </div>
-      <div className="bg-white rounded-b-3xl p-6 shadow-lg">
-        <Field label={t("code")}><input className={inputCls+" text-center font-mono uppercase"} value={code}
-          onChange={e=>setCode(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&lookup()} placeholder={t("codePh")}/></Field>
-        <Btn onClick={()=>lookup()} size="lg">{busy?"…":"→ "+t("cont")}</Btn>
-        <div className="text-center mt-4 pt-4 border-t border-slate-100"><button onClick={onAdmin} className="text-xs text-slate-400">{t("admin")}</button></div>
-      </div>
-    </div></div>
-  ); }
-
-  /* ---------------- WIZARD CHROME ---------------- */
-  const order=["personal","id","rules","comm"];
-  const labels={personal:t("sPersonal"),id:t("sId"),rules:t("sRules"),comm:t("sComm")};
-  const idx=order.indexOf(step);
-  const header=()=> (
-    <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 mb-4">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-semibold text-slate-700">{t("step")} {idx+1} {t("of")} {order.length} · {labels[step]}</div>
-        <LangBar glang={glang} setGlang={setGlang}/>
-      </div>
-      <div className="flex gap-1">{order.map((s,i)=><div key={s} className={"h-1.5 flex-1 rounded-full "+(i<=idx?"bg-blue-600":"bg-slate-200")}/>)}</div>
-      <div className="text-xs text-slate-400 mt-2">{t("welcome")}, {booking.guest_name||"Gast"} · {roomShort(room.room_number)} · {fmtShort(booking.check_in_date)}–{fmtShort(booking.check_out_date)}</div>
     </div>
   );
-  const wrap=(kids)=> <div className="min-h-screen p-4"><div className="max-w-md mx-auto py-4">{header()}{kids}</div></div>;
-  const nav=(o)=> { const {onBack,onNext,nextLabel,nextDisabled}=o; return (
-    <div className="flex gap-2 mt-4">
-      {onBack&&<button onClick={onBack} className="px-4 py-2.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold">{t("back")}</button>}
-      <button onClick={onNext} disabled={nextDisabled} className={"flex-1 rounded-xl py-2.5 text-sm font-semibold text-white "+(nextDisabled?"bg-slate-300":"bg-blue-600 hover:bg-blue-700")}>{nextLabel||t("cont")}</button>
-    </div>
-  ); };
-
-  /* ---------------- STEP: PERSONAL ---------------- */
-  if(step==="personal"){ const ok=pdata.full_name.trim()&&pdata.email.trim()&&pdata.phone.trim(); return (
-    wrap(<Card className="p-5">
-      <h3 className="font-semibold text-slate-800">{t("pHead")}</h3>
-      <p className="text-xs text-slate-500 mb-3">{t("pNote")}</p>
-      <Field label={t("name")}><input className={inputCls} value={pdata.full_name} onChange={e=>setPdata(p=>({...p,full_name:e.target.value}))}/></Field>
-      <Field label={t("email")}><input className={inputCls} type="email" value={pdata.email} onChange={e=>setPdata(p=>({...p,email:e.target.value}))}/></Field>
-      <Field label={t("phone")}><input className={inputCls} type="tel" value={pdata.phone} onChange={e=>setPdata(p=>({...p,phone:e.target.value}))}/></Field>
-      {nav({onBack:reset, onNext:()=>ok?setStep("id"):toast(t("reqAll"),"err"), nextDisabled:!ok})}
-    </Card>)
-  ); }
-
-  /* ---------------- STEP: IDENTITY ---------------- */
-  if(step==="id"){ return (
-    wrap(<Card className="p-5">
-      <h3 className="font-semibold text-slate-800">{t("idHead")}</h3>
-      <p className="text-xs text-slate-500 mb-3">{t("idNote")}</p>
-      <div className="space-y-3">{guests.map((g,i)=>(
-        <div key={i} className="border border-slate-200 rounded-xl p-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-semibold text-slate-700">{t("person")} {i+1}</span>
-            {i>0&&<button onClick={()=>removeGuest(i)} className="text-xs text-rose-500">{t("removeGuest")}</button>}</div>
-          {i>0&&<input className={inputCls+" mb-2"} placeholder={t("guestName")} value={g.name} onChange={e=>setGuests(arr=>arr.map((x,k)=>k===i?{...x,name:e.target.value}:x))}/>}
-          <div className="grid grid-cols-2 gap-2">
-            <label className={"cursor-pointer rounded-xl border-2 border-dashed p-3 text-center text-xs font-semibold "+(g.front?"border-emerald-300 bg-emerald-50 text-emerald-700":"border-slate-300 text-slate-500")}>
-              {g.busyF?t("uploading"):(g.front?t("front")+" "+t("uploaded"):t("upFront"))}
-              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>uploadId(e.target.files[0],i,"front")}/></label>
-            <label className={"cursor-pointer rounded-xl border-2 border-dashed p-3 text-center text-xs font-semibold "+(g.back?"border-emerald-300 bg-emerald-50 text-emerald-700":"border-slate-300 text-slate-500")}>
-              {g.busyB?t("uploading"):(g.back?t("back")+" "+t("uploaded"):t("upBack"))}
-              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>uploadId(e.target.files[0],i,"back")}/></label>
-          </div>
-          {g.front&&g.back&&<div className="text-xs text-emerald-600 mt-2">{t("both")}</div>}
-        </div>))}</div>
-      <button onClick={addGuest} className="w-full mt-3 border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">{t("addGuest")}</button>
-      {dupId&&<div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">{t("sameId")}</div>}
-      {nav({onBack:()=>setStep("personal"), onNext:()=>allIdsDone?setStep("rules"):toast(dupId?t("sameId"):t("needBoth"),"err"), nextDisabled:!allIdsDone})}
-    </Card>)
-  ); }
-
-  /* ---------------- STEP: HOUSE RULES ---------------- */
-  if(step==="rules"){ return (
-    wrap(<React.Fragment>
-      <div className="bg-rose-600 text-white rounded-2xl p-4 mb-4 flex items-center gap-3">
-        <span className="text-3xl">🚭</span>
-        <div><div className="font-extrabold text-lg tracking-wide">{t("noSmokeT")}</div><div className="text-sm opacity-90">{t("noSmokeS")}</div></div>
-      </div>
-      <Card className="p-5">
-        <h3 className="font-semibold text-slate-800 mb-2">📋 {t("rulesHead")}</h3>
-        {hr.length>0
-          ? <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>)}</ol>
-          : <p className="text-sm text-slate-400">—</p>}
-        <label className="flex items-start gap-2 mt-4 text-sm text-slate-700">
-          <input type="checkbox" checked={agreeRules} onChange={e=>setAgreeRules(e.target.checked)} className="w-5 h-5 mt-0.5 accent-blue-600"/>
-          <span>{t("agreeRules")}</span></label>
-        {nav({onBack:()=>setStep("id"), onNext:()=>agreeRules?setStep("comm"):toast(t("mustAgree"),"err"), nextLabel:t("accept"), nextDisabled:!agreeRules})}
-      </Card>
-    </React.Fragment>)
-  ); }
-
-  /* ---------------- STEP: COMMUNITY + CASHBACK ---------------- */
-  if(step==="comm"){ const cl=["Zimmer & Bett","Boden & Bad","Kühlschrank leer","Kein Müll","Fenster zu"]; return (
-    wrap(<React.Fragment>
-      <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-2xl p-5 mb-4">
-        <div className="text-sm opacity-90">💶 {t("cashT")}</div>
-        <div className="text-base font-bold mt-1">{t("cashS")}</div>
-        <div className="text-xs opacity-90 mt-3">{t("cashShow")}</div>
-        <div className="flex flex-wrap gap-1.5 mt-1">{cl.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
-        <label className="flex items-start gap-2 mt-3 text-sm">
-          <input type="checkbox" checked={vidConsent} onChange={e=>setVidConsent(e.target.checked)} className="w-5 h-5 mt-0.5 accent-white"/>
-          <span>{t("agreeVideo")}</span></label>
-      </div>
-      <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">💬 {t("platT")}</h3>
-        <p className="text-sm text-slate-500 mt-1">{t("platS")}</p>
-        <button onClick={openPlatform} className="w-full mt-3 bg-slate-900 text-white rounded-xl py-2.5 text-sm font-semibold">{t("openPlat")}</button>
-        <p className="text-xs text-slate-400 mt-3">{t("installHint")}</p>
-        {nav({onBack:()=>setStep("rules"), onNext:finish, nextLabel:busy?t("saving"):t("finish"), nextDisabled:busy})}
-      </Card>
-    </React.Fragment>)
-  ); }
-
-  /* ---------------- STEP: SUCCESS / DASHBOARD ---------------- */
+  const room=booking.rooms||{};
+  const sendIssue=async()=>{ if(!issue.message.trim())return toast("Bitte Problem beschreiben","err");
+    const {error}=await sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:issue.category||null,message:issue.message});
+    if(error)return err(error); setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet"); };
+  const checklist=["Jedes Zimmer & Bett","Boden & Bad","Kühlschrank leer","Kein Müll","Fenster geschlossen"];
   return (
     <div className="min-h-screen p-4"><div className="max-w-md mx-auto space-y-4 py-4">
-      <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 flex items-center justify-between">
-        <div className="flex items-center gap-3"><span className="text-2xl">✅</span>
-          <div><div className="font-bold text-slate-800">{t("okHead")}</div><div className="text-xs text-slate-400">{t("okSub")}</div></div></div>
-        <LangBar glang={glang} setGlang={setGlang}/>
+      <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-2xl p-5">
+        <div className="text-sm opacity-90">💶 Cashback-Aktion</div>
+        <div className="text-xl font-bold mt-1">Lade beim Auszug ein Video hoch – 20 € zurück, wenn alles sauber ist.</div>
+        <div className="text-xs opacity-90 mt-3">Das muss im Video zu sehen sein:</div>
+        <div className="flex flex-wrap gap-1.5 mt-1">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
       </div>
       <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">{t("welcome")} {booking.guest_name||"Gast"} · {roomShort(room.room_number)}</h3>
-        <p className="text-xs text-slate-400 mb-3">{t("stayFrom")}: {fmt(booking.check_in_date)} – {fmt(booking.check_out_date)}</p>
+        <h3 className="font-semibold text-slate-800">Hallo {booking.guest_name||"Gast"} · {roomShort(room.room_number)}</h3>
+        <p className="text-xs text-slate-400 mb-3">Aufenthalt: {fmt(booking.check_in_date)} – {fmt(booking.check_out_date)}</p>
         <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("houseCode")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("roomPin")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("wifi")}</div><div className="font-semibold text-slate-800">{house.wifi_ssid||room.wifi_ssid||"—"}</div></div>
-          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{t("wifiPw")}</div><div className="font-mono text-slate-800">{house.wifi_password||room.wifi_password||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Haustür-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Zimmer-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
+          <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">{room.wifi_password||"—"}</div></div>
         </div>
-        {(addr||house.name)&&<div className="mt-3 bg-slate-50 rounded-xl p-3 text-sm"><div className="text-xs text-slate-400">{t("address")}</div><div className="font-semibold text-slate-800">{house.name?house.name+" · ":""}{addr||"—"}</div></div>}
-        <button onClick={openPlatform} className="block w-full text-center mt-3 bg-slate-900 text-white rounded-xl py-2.5 text-sm font-semibold">💬 {t("openPlat")}</button>
+        {room.whatsapp_url&&<a href={room.whatsapp_url} target="_blank" rel="noreferrer" className="block text-center mt-3 bg-emerald-600 text-white rounded-xl py-2.5 text-sm font-semibold">💬 WhatsApp-Gruppe öffnen</a>}
       </Card>
-      <Card className="p-5">
-        <h3 className="font-semibold text-slate-800 mb-2">{t("introT")}</h3>
-        {(room.intro_video_url||room.youtube_door_link)
-          ? <div className="space-y-2">
-              {room.intro_video_url&&<a href={room.intro_video_url} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">{t("introBtn")}</a>}
-              {room.youtube_door_link&&<a href={room.youtube_door_link} target="_blank" rel="noreferrer" className="block text-center bg-slate-700 text-white rounded-xl py-3 text-sm font-semibold">{t("doorBtn")}</a>}
-            </div>
-          : <p className="text-sm text-slate-400">{t("videoSoon")}</p>}
-        <p className="text-xs text-slate-400 mt-3">{t("installHint")}</p>
-      </Card>
-      {thr.on&&<Card className="p-5">
-        {thr.company&&thr.company.accent_color&&<div className="h-1 -mx-5 -mt-5 mb-3 rounded-t-2xl" style={{background:thr.company.accent_color}}/>}
-        <div className="flex items-center gap-2 mb-2">
-          {thr.company&&thr.company.logo_url&&<img src={thr.company.logo_url} alt="" className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-100 shrink-0"/>}
-          <div className="min-w-0">
-            <h3 className="font-semibold text-slate-800 leading-tight">💬 {t("msgTitle")}</h3>
-            {thr.company&&<p className="text-xs text-slate-400 truncate">{thr.company.display_name||thr.company.name}</p>}
-          </div>
-        </div>
-        <div className="space-y-2 max-h-72 overflow-y-auto mb-3">
-          {thr.msgs.length===0&&<p className="text-sm text-slate-400">{t("msgEmpty")}</p>}
-          {thr.msgs.map(m=>(
-            <div key={m.id} className={"max-w-[85%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-slate-100 text-slate-700":"bg-blue-600 text-white ml-auto")}>
-              {m.type&&m.type!=="chat"&&<div className="text-[10px] uppercase opacity-70 mb-0.5">{m.type}</div>}
-              {m.body}{m.attachment_path&&<div className="text-[11px] opacity-80 mt-1">📎 {t("attach")}</div>}
-            </div>))}
-        </div>
-        {thr.pendingPhoto&&<div className="text-xs text-emerald-600 mb-1">📎 {t("attach")} ✓</div>}
-        <div className="flex gap-2">
-          <label className="cursor-pointer px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-semibold">📎<input type="file" accept="image/*" className="hidden" onChange={e=>attachPhoto(e.target.files[0])}/></label>
-          <input className={inputCls+" flex-1 !mt-0"} value={thr.body} onChange={e=>setThr(s=>({...s,body:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&sendMsg()} placeholder={t("msgPlaceholder")}/>
-          <button onClick={sendMsg} disabled={thr.busy} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold">{thr.busy?"…":t("msgSend")}</button>
-        </div>
-      </Card>}
-      {hthr.on&&<Card className="p-5">
-        <div className="flex items-center gap-2 mb-2"><h3 className="font-semibold text-slate-800 leading-tight">🏠 {t("houseChatTitle")}</h3>{hthr.house&&<p className="text-xs text-slate-400 truncate">{hthr.house.code||hthr.house.name}</p>}</div>
-        <div className="space-y-2 max-h-72 overflow-y-auto mb-3">
-          {hthr.msgs.length===0&&<p className="text-sm text-slate-400">{t("houseChatEmpty")}</p>}
-          {hthr.msgs.map(m=>(
-            <div key={m.id} className={"max-w-[85%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-slate-100 text-slate-700":"bg-emerald-600 text-white ml-auto")}>
-              {m.sender!=="team"&&m.author&&<div className="text-[10px] opacity-80 mb-0.5">{m.author}</div>}
-              {m.type&&m.type!=="chat"&&<div className="text-[10px] uppercase opacity-70 mb-0.5">{m.type}</div>}
-              {m.body}{m.attachment_path&&<div className="text-[11px] opacity-80 mt-1">📎 {t("attach")}</div>}
-            </div>))}
-        </div>
-        {hthr.pendingPhoto&&<div className="text-xs text-emerald-600 mb-1">📎 {t("attach")} ✓</div>}
-        <div className="flex gap-2">
-          <label className="cursor-pointer px-3 py-2 rounded-lg bg-slate-100 text-slate-600 text-sm font-semibold">📎<input type="file" accept="image/*" className="hidden" onChange={e=>attachHousePhoto(e.target.files[0])}/></label>
-          <input className={inputCls+" flex-1 !mt-0"} value={hthr.body} onChange={e=>setHthr(s=>({...s,body:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&sendHouseMsg()} placeholder={t("houseChatPh")}/>
-          <button onClick={sendHouseMsg} disabled={hthr.busy} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">{hthr.busy?"…":t("msgSend")}</button>
-        </div>
-      </Card>}
       {Array.isArray(room.photos)&&room.photos.length>0&&<Card className="p-5">
-        <h3 className="font-semibold text-slate-800 mb-2">{t("photosT")}</h3>
+        <h3 className="font-semibold text-slate-800 mb-2">📷 Dein Zimmer</h3>
         <div className="flex gap-2 overflow-x-auto pb-1">{room.photos.map((url,i)=>(
           <a key={i} href={url} target="_blank" rel="noreferrer" className="shrink-0"><img src={url} alt="" className="h-40 rounded-xl object-cover"/></a>))}</div>
       </Card>}
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800 mb-2">🎬 Anleitung: Wo finde ich was?</h3>
+        {(room.intro_video_url||room.youtube_door_link)
+          ? <div className="space-y-2">
+              {room.intro_video_url&&<a href={room.intro_video_url} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">▶ Check-in & Lage des Zimmers</a>}
+              {room.youtube_door_link&&<a href={room.youtube_door_link} target="_blank" rel="noreferrer" className="block text-center bg-slate-700 text-white rounded-xl py-3 text-sm font-semibold">▶ Tür- & Wegbeschreibung</a>}
+            </div>
+          : <p className="text-sm text-slate-400">Video folgt.</p>}
+        <p className="text-xs text-slate-400 mt-3">📲 Tipp: Über das Browser-Menü „Zum Home-Bildschirm hinzufügen" hast du die Check-In-App immer griffbereit.</p>
+      </Card>
       {hr.length>0&&<Card className="p-5">
-        <div className="flex items-center justify-between mb-2"><h3 className="font-semibold text-slate-800">📋 {t("rulesHead")}</h3></div>
+        <div className="flex items-center justify-between mb-2"><h3 className="font-semibold text-slate-800">📋 Hausregeln</h3>
+          <div className="flex gap-1">{["de","en","cs","sk","ru"].map(l=><button key={l} onClick={()=>setGlang(l)} className={"text-xs px-2 py-1 rounded font-semibold "+(glang===l?"bg-blue-600 text-white":"bg-slate-100 text-slate-500")}>{l.toUpperCase()}</button>)}</div></div>
         <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>)}</ol></Card>}
       <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">{t("extendT")}</h3>
-        <p className="text-sm text-slate-500 mt-1">{t("extendNow")} {fmt(booking.check_out_date)}</p>
-        <button className="w-full mt-2 border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">{t("extendBtn")}</button>
+        <h3 className="font-semibold text-slate-800">Aufenthalt verlängern?</h3>
+        <p className="text-sm text-slate-500 mt-1">Auszug aktuell: {fmt(booking.check_out_date)}</p>
+        <button className="w-full mt-2 border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">+ Verlängerung anfragen</button>
       </Card>
       <Card className="p-5">
-        <h3 className="font-semibold text-slate-800">{t("problemT")}</h3>
+        <h3 className="font-semibold text-slate-800">🛠 Problem melden</h3>
         {issueSent
-          ? <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">{t("problemOk")} <button onClick={()=>setIssueSent(false)} className="underline">{t("more")}</button></div>
+          ? <div className="mt-2 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✓ Danke! Deine Meldung ist eingegangen. <button onClick={()=>setIssueSent(false)} className="underline">Weitere melden</button></div>
           : <div className="mt-2 space-y-2">
               <select value={issue.category} onChange={e=>setIssue(s=>({...s,category:e.target.value}))} className={inputCls}>
-                <option value="">{t("cat")}</option><option>Heizung/Strom</option><option>Wasser/Bad</option><option>WLAN</option><option>Sauberkeit</option><option>Schlüssel/Tür</option><option>Sonstiges</option></select>
-              <textarea value={issue.message} onChange={e=>setIssue(s=>({...s,message:e.target.value}))} rows={3} placeholder={t("problemPh")} className={inputCls}/>
-              <button onClick={sendIssue} className="w-full bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold">{t("send")}</button>
+                <option value="">Kategorie wählen…</option><option>Heizung/Strom</option><option>Wasser/Bad</option><option>WLAN</option><option>Sauberkeit</option><option>Schlüssel/Tür</option><option>Sonstiges</option></select>
+              <textarea value={issue.message} onChange={e=>setIssue(s=>({...s,message:e.target.value}))} rows={3} placeholder="Was ist das Problem?" className={inputCls}/>
+              <button onClick={sendIssue} className="w-full bg-blue-600 text-white rounded-xl py-2.5 text-sm font-semibold">Senden</button>
             </div>}
       </Card>
-      <button onClick={reset} className="text-xs text-slate-400 w-full text-center">{t("otherCode")}</button>
-    </div></div>
-  );
-}
-/* ============================ GAST — CHECKOUT-VIDEO (token-gated, set_checkout_video RPC) ============================ */
-function Checkout({token}){
-  const [glang,setGlang]=useState("de");
-  const [busy,setBusy]=useState(false),[done,setDone]=useState(false),[bad,setBad]=useState(false);
-  const t=(k)=>(TR[glang]&&TR[glang][k])||TR.en[k]||k;
-  const cl=["Zimmer & Bett","Boden & Bad","K\u00fchlschrank leer","Kein M\u00fcll","Fenster zu"];
-  async function upload(file){ if(!file||busy) return; setBusy(true); setBad(false);
-    const ext=((file.name||"").split(".").pop()||"mp4").toLowerCase();
-    const path=`${token}/${Date.now()}.${ext}`;
-    const {error}=await sb.storage.from("checkout-videos").upload(path,file,{upsert:true,contentType:file.type||"video/mp4"});
-    if(error){ err(error); setBusy(false); return; }
-    const {data,error:e2}=await sb.rpc("set_checkout_video",{p_checkout_token:token, p_video_url:path});
-    setBusy(false);
-    if(e2||!data||data.error){ setBad(true); return; }
-    setDone(true);
-  }
-  return (
-    <div className="min-h-screen flex items-center justify-center p-4"><div className="w-full max-w-sm">
-      <div className="bg-slate-900 rounded-t-3xl p-6 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-emerald-600 mx-auto flex items-center justify-center text-2xl">🎥</div>
-        <h2 className="text-white font-bold text-xl mt-3">{t("coTitle")}</h2>
-        <p className="text-slate-400 text-sm">{t("coSub")}</p>
-        <div className="mt-4"><LangBar glang={glang} setGlang={setGlang}/></div>
-      </div>
-      <div className="bg-white rounded-b-3xl p-6 shadow-lg">
-        {done
-          ? <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-700">{t("coThanks")}</div>
-          : <div>
-              <div className="text-xs text-slate-500 mb-1">{t("coShow")}</div>
-              <div className="flex flex-wrap gap-1.5 mb-4">{cl.map((c,i)=><span key={i} className="bg-slate-100 rounded-full px-2.5 py-1 text-xs text-slate-600">✓ {c}</span>)}</div>
-              {bad&&<div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-sm text-rose-700 mb-3">{t("coBadToken")}</div>}
-              <label className="block w-full text-center bg-emerald-600 text-white rounded-xl py-3 text-sm font-semibold cursor-pointer">
-                {busy?t("coUploading"):t("coUpload")}
-                <input type="file" accept="video/*" capture="environment" className="hidden" onChange={e=>upload(e.target.files[0])}/>
-              </label>
-            </div>}
-      </div>
-    </div></div>
-  );
-}
-
-/* ============================ ADMIN — POSTFACH (Firmen-Kanal, Phase C MVP) ============================ */
-function BroadcastModal({objekte,onClose,onSent}){
-  const [sel,setSel]=useState({}); const [body,setBody]=useState(""); const [busy,setBusy]=useState(false); const [preview,setPreview]=useState(null);
-  const houseIds=Object.keys(sel).filter(k=>sel[k]);
-  useEffect(()=>{ (async()=>{ if(!houseIds.length){ setPreview(null); return; }
-    const today=new Date().toISOString().slice(0,10);
-    const {data}=await sb.from("reservations").select("company_id, companies(name,display_name), rooms!inner(objekt_id)").is("archived_at",null).gte("check_out_date",today).in("rooms.objekt_id",houseIds);
-    const map={}; (data||[]).forEach(r=>{ if(r.company_id) map[r.company_id]=(r.companies&&(r.companies.display_name||r.companies.name))||r.company_id; });
-    setPreview(Object.values(map)); })(); },[JSON.stringify(houseIds)]); // eslint-disable-line
-  const send=async()=>{ if(!body.trim())return toast("Nachricht eingeben","err"); if(!houseIds.length)return toast("Mind. ein Haus wählen","err"); setBusy(true);
-    const {data,error}=await sb.rpc("send_broadcast",{p_body:body,p_house_ids:houseIds}); setBusy(false);
-    if(error)return err(error); const n=(data&&(data.count!=null?data.count:(Array.isArray(data.affected)?data.affected.length:0)))||0; toast("Gesendet an "+n+" Firma(en)"); onSent&&onSent(); onClose(); };
-  return (<Modal title="Störung / Info senden" onClose={onClose}>
-    <div className="text-xs text-slate-500 mb-1">Betroffene Häuser</div>
-    <div className="flex flex-wrap gap-1.5 mb-3">{objekte.map(o=>(<label key={o.id} className={"text-xs px-2 py-1 rounded-lg cursor-pointer border "+(sel[o.id]?"bg-blue-50 border-blue-300 text-blue-700":"border-slate-200 text-slate-500")}><input type="checkbox" className="hidden" checked={!!sel[o.id]} onChange={e=>setSel(x=>({...x,[o.id]:e.target.checked}))}/>{o.code}</label>))}</div>
-    <Field label="Nachricht"><textarea className={inputCls} rows={4} value={body} onChange={e=>setBody(e.target.value)} placeholder="z.B. In FWS17 fällt heute die Elektrik aus…"/></Field>
-    {preview&&<div className="text-xs text-slate-600 mb-2 bg-slate-50 rounded-lg p-2">Geht an {preview.length} Firma(en){preview.length?": "+preview.join(", "):""}</div>}
-    <div className="flex gap-2 mt-2"><Btn onClick={send}>{busy?"…":"Senden"}</Btn><Btn kind="soft" onClick={onClose}>Abbrechen</Btn></div>
-  </Modal>);
-}
-function Postfach({bump}){
-  const [mode,setMode]=useState("company");
-  const [threads,setThreads]=useState(null),[sel,setSel]=useState(null),[msgs,setMsgs]=useState([]),[reply,setReply]=useState(""),[busy,setBusy]=useState(false),[off,setOff]=useState(false),[housePending,setHousePending]=useState(false);
-  const [objekte]=useList(loaders.objekte,[bump]); const [showBc,setShowBc]=useState(false);
-  useEffect(()=>{ setSel(null); setMsgs([]); load(); },[bump,mode]); // eslint-disable-line
-  const isH=mode==="house";
-  const toggle=()=>(<div className="flex gap-1"><button onClick={()=>setMode("company")} className={"px-3 py-1.5 rounded-lg text-xs font-semibold "+(!isH?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>Firmen</button><button onClick={()=>setMode("house")} className={"px-3 py-1.5 rounded-lg text-xs font-semibold "+(isH?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>Häuser</button></div>);
-  const label=(th)=> isH ? ((th.cleaning_objekte&&(th.cleaning_objekte.code||th.cleaning_objekte.name))||"Haus") : ((th.companies&&(th.companies.display_name||th.companies.name))||"—");
-  async function load(){
-    if(isH){ const {data,error}=await sb.from("house_threads").select("*, cleaning_objekte(code,name)").order("last_message_at",{ascending:false});
-      if(error){ setHousePending(true); setThreads([]); return; } setHousePending(false); setThreads(data||[]); return; }
-    const {data,error}=await sb.from("company_threads").select("*, companies(name,display_name,accent_color,logo_url)").order("last_message_at",{ascending:false});
-    if(error){ setOff(true); setThreads([]); return; } setOff(false); setThreads(data||[]); }
-  async function open(th){ setSel(th); const {data}=await sb.from(isH?"house_messages":"messages").select("*").eq("thread_id",th.id).order("created_at",{ascending:true}); setMsgs(data||[]); }
-  async function send(){ if(!reply.trim()||!sel) return; setBusy(true);
-    const {error}=await sb.from(isH?"house_messages":"messages").insert({thread_id:sel.id,sender:"team",body:reply,type:"chat"});
-    if(error){ err(error); setBusy(false); return; }
-    await sb.from(isH?"house_threads":"company_threads").update({last_message_at:new Date().toISOString(),status:"open"}).eq("id",sel.id);
-    setReply(""); setBusy(false); open(sel); load(); }
-  async function viewAtt(p){ const {data,error}=await sb.storage.from("guest-uploads").createSignedUrl(p,3600); if(error) return err(error); window.open(data.signedUrl,"_blank","noreferrer"); }
-  if(off&&!isH) return (<div className="space-y-4"><div className="flex justify-between items-center">{toggle()}</div><Empty>Firmen-Postfach wird aktiviert, sobald companies/company_threads/messages + Bucket „guest-uploads" da sind. Backend: Jean.</Empty></div>);
-  if(threads===null) return <Skeleton/>;
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">{toggle()}<Btn onClick={()=>setShowBc(true)}>📢 Störung/Info senden</Btn></div>
-      {isH&&housePending&&<Empty>Haus-Kanal wird aktiviert, sobald house_threads / house_messages + RPCs angelegt sind. Backend: Jean.</Empty>}
-      <div className="grid md:grid-cols-3 gap-4">
-      <Card className="p-3 md:col-span-1">
-        <PageHead title={isH?"Haus-Postfach":"Firmen-Postfach"} sub={threads.length+" Fäden"}/>
-        <div className="space-y-1 mt-2">{threads.length===0&&<Empty>Keine Fäden</Empty>}
-          {threads.map(th=>{ const c=th.companies||{}; return (
-            <button key={th.id} onClick={()=>open(th)} className={"w-full text-left px-3 py-2 rounded-lg "+(sel&&sel.id===th.id?"bg-blue-50 border border-blue-200":"hover:bg-slate-50")}>
-              <div className="flex items-center gap-2">
-                {!isH&&c.accent_color&&<span className="w-2.5 h-2.5 rounded-full shrink-0" style={{background:c.accent_color}}/>}
-                {!isH&&c.logo_url&&<img src={c.logo_url} alt="" className="w-5 h-5 rounded object-contain shrink-0"/>}
-                {isH&&<span className="text-sm">🏠</span>}
-                <span className="font-semibold text-sm text-slate-800 truncate">{label(th)}</span>
-              </div>
-              <div className="text-xs text-slate-400">{fmt(th.last_message_at)} · {th.status||"open"}</div>
-            </button>); })}</div>
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800">Check-out · Live-Videoprüfung</h3>
+        {phase==="idle"&&<button onClick={()=>evaluate(false)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-3 font-semibold">🎥 Auszugsvideo hochladen (20 € zurück)</button>}
+        {phase==="evaluating"&&<div className="mt-3 flex items-center gap-3 text-slate-600 text-sm"><span className="animate-spin inline-block w-5 h-5 border-2 border-slate-300 border-t-blue-600 rounded-full"></span>Auswertung läuft… einen Moment ⏳</div>}
+        {(phase==="review"||phase==="done")&&<div className="mt-3 grid grid-cols-2 gap-1">{ELEMENTS.map((e,i)=>(
+          <div key={i} className={"flex items-center gap-2 text-sm "+(detected[e]?"text-emerald-700":"text-rose-600 font-semibold")}><span>{detected[e]?"✓":"✗"}</span><span>{e}</span></div>))}</div>}
+        {phase==="review"&&missing.length>0&&<div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">⚠️ Fast geschafft! Bitte filme noch: <b>{missing.join(", ")}</b>.
+          <button onClick={()=>evaluate(true)} className="w-full mt-2 bg-emerald-600 text-white rounded-xl py-2.5 font-semibold">🎥 {missing[0]}-Video nachreichen</button></div>}
+        {phase==="done"&&<div className="mt-3 bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-700">✅ Alle Elemente erkannt! Wird zur Freigabe vorgelegt – bei sauberem Zustand 20 € zurück.</div>}
       </Card>
-      <Card className="p-4 md:col-span-2">
-        {!sel?<Empty>Faden wählen</Empty>:<div>
-          <div className="flex items-center gap-2 mb-2">
-            {!isH&&sel.companies&&sel.companies.accent_color&&<span className="w-3 h-3 rounded-full shrink-0" style={{background:sel.companies.accent_color}}/>}
-            {!isH&&sel.companies&&sel.companies.logo_url&&<img src={sel.companies.logo_url} alt="" className="w-6 h-6 rounded object-contain shrink-0"/>}
-            {isH&&<span className="text-base">🏠</span>}
-            <span className="font-semibold text-slate-800">{label(sel)}</span>
-          </div>
-          <div className="space-y-2 max-h-[50vh] overflow-y-auto mb-3">
-            {msgs.length===0&&<Empty>Noch keine Nachrichten</Empty>}
-            {msgs.map(m=>(
-              <div key={m.id} className={"max-w-[80%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-blue-600 text-white ml-auto":"bg-slate-100 text-slate-700")}>
-                {m.sender!=="team"&&m.author&&<div className="text-[10px] opacity-70 mb-0.5">{m.author}</div>}
-                {m.type&&m.type!=="chat"&&<div className="text-[10px] uppercase opacity-70 mb-0.5">{m.type}</div>}
-                {m.body}
-                {m.attachment_path&&<button onClick={()=>viewAtt(m.attachment_path)} className="block text-[11px] underline mt-1">📎 Anhang ansehen</button>}
-                <div className="text-[10px] opacity-60 mt-0.5">{fmt(m.created_at)}</div>
-              </div>))}
-          </div>
-          <div className="flex gap-2">
-            <input className={inputCls+" flex-1 !mt-0"} value={reply} onChange={e=>setReply(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder={isH?"Antwort ans Haus…":"Antwort an die Firma…"}/>
-            <Btn onClick={send}>{busy?"…":"Senden"}</Btn>
-          </div>
-        </div>}
-      </Card>
-      </div>
-      {showBc&&<BroadcastModal objekte={objekte} onClose={()=>setShowBc(false)} onSent={load}/>}
-    </div>
+      <button onClick={()=>{setBooking(null);setCode("");setPhase("idle");setDetected({});}} className="text-xs text-slate-400 w-full text-center">← anderer Code</button>
+    </div></div>
   );
 }
 
@@ -1685,7 +1067,92 @@ function Meldungen({bump}) {
 }
 
 /* ============================ SHELL ============================ */
-const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["acct","Rechnungswesen","🧾"],["msg","Meldungen","📨"],["inbox","Postfach","📬"],["set","Einstellungen","⚙️"]];
+/* ============================ PRICING ============================ */
+function Pricing({bump}){
+  const [rules,reload]=useList(loaders.pricing,[bump]);
+  const [res]=useList(loaders.reservations,[bump]);
+  const [inv]=useList(loaders.qonto,[bump]);
+  const [draft,setDraft]=useState({});
+  const [calc,setCalc]=useState({type:1,persons:1,nights:3,offer:""});
+  const [saving,setSaving]=useState(false);
+  if(!rules||!res||!inv) return <Skeleton/>;
+  const TYPES=[[1,"Einzelzimmer · 1P"],[2,"Doppelzimmer · 2P"],[3,"Dreibettzimmer · 3P"]];
+  const BANDS=[["short","Kurz · ≤6 Nächte"],["week","Woche · 7–27 N."],["month","Langzeit · ≥28 N."]];
+  const k=(t,b)=>t+"_"+b;
+  const ruleMap={}; rules.forEach(r=>ruleMap[k(r.room_type,r.stay_band)]=r);
+  const cell=(t,b,f)=> (draft[k(t,b)]&&draft[k(t,b)][f]!==undefined)?draft[k(t,b)][f]:(ruleMap[k(t,b)]?.[f] ?? "");
+  const setCell=(t,b,f,v)=> setDraft(d=>({...d,[k(t,b)]:{...(d[k(t,b)]||{}),[f]:v}}));
+  const cur=(n)=>"€ "+(Math.round((+n||0)*100)/100).toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const nights=(r)=>{ if(!r.check_in_date||!r.check_out_date)return 0; return Math.max(0,Math.round((new Date(r.check_out_date)-new Date(r.check_in_date))/86400000)); };
+  let personNights=0; res.forEach(r=>{ personNights+=nights(r)*(r.persons||r.rooms?.capacity||1); });
+  const invoiced=inv.filter(x=>(x.status||"").toLowerCase()!=="canceled").reduce((a,x)=>a+(+x.amount||0),0);
+  const baseline=personNights?Math.round(invoiced/personNights*100)/100:0;
+  const bandFactor={short:1.15,week:1.0,month:0.8}, typeFactor={1:1.0,2:0.92,3:0.85};
+  const suggest=()=>{ if(!baseline)return toast("Zu wenig Historie für Vorschlag","err"); const d={}; TYPES.forEach(([t])=>BANDS.forEach(([b])=>{ const g=Math.max(1,Math.round(baseline*bandFactor[b]*typeFactor[t])); d[k(t,b)]={guidance_pp_night:g,floor_pp_night:Math.round(g*0.8)}; })); setDraft(d); toast("Vorschlag aus Historie eingesetzt – bitte prüfen & speichern"); };
+  const save=async()=>{ setSaving(true); try{
+    const rows=[]; TYPES.forEach(([t])=>BANDS.forEach(([b])=>{ const g=cell(t,b,"guidance_pp_night"), fl=cell(t,b,"floor_pp_night"); if(g!==""||fl!=="") rows.push({room_type:t,stay_band:b,guidance_pp_night:g===""?null:+g,floor_pp_night:fl===""?null:+fl,updated_at:new Date().toISOString()}); }));
+    if(rows.length){ const {error}=await sb.from("pricing_rules").upsert(rows,{onConflict:"room_type,stay_band"}); if(error)throw error; }
+    toast("Pricing gespeichert"); setDraft({}); reload(); }catch(e){err(e);}finally{setSaving(false);} };
+  const bandForNights=(n)=> n>=28?"month":n>=7?"week":"short";
+  const cb=bandForNights(+calc.nights||0);
+  const gRule=ruleMap[k(+calc.type,cb)]||{};
+  const guid=+gRule.guidance_pp_night||0, floor=+gRule.floor_pp_night||0;
+  const offer=parseFloat(calc.offer);
+  const totGuid=guid*(+calc.persons||0)*(+calc.nights||0);
+  const offerStatus = isNaN(offer)?null : offer>=guid?["Über/auf Zielpreis ✓","bg-emerald-100 text-emerald-700"] : offer>=floor?["Unter Ziel, über Floor – ok mit Begründung","bg-amber-100 text-amber-700"] : ["🚧 Unter Floor – Freigabe von Jarne nötig (Gate)","bg-rose-100 text-rose-700"];
+  const byFirm={}; inv.filter(x=>(x.status||"").toLowerCase()!=="canceled").forEach(x=>{ const c=x.company||"—"; (byFirm[c]=byFirm[c]||[]).push(x); });
+  const firms=Object.entries(byFirm).map(([c,list])=>{ const last=list.slice().sort((a,b)=>(b.issue_date||"").localeCompare(a.issue_date||""))[0]; return {c,n:list.length,last,avg:Math.round(list.reduce((a,x)=>a+(+x.amount||0),0)/list.length)}; }).sort((a,b)=>b.n-a.n).slice(0,12);
+  const selCls="border border-slate-300 rounded-lg px-2 py-1.5 text-sm";
+  return (<div className="space-y-5">
+    <PageHead title="Pricing" sub="Leitplanken € / Nacht / Person · Floor = Minimum · Guidance = Ziel · Gate = unter Floor braucht Freigabe"/>
+    <Card className="p-5">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-2">
+        <h2 className="font-semibold text-slate-800">Preis-Matrix · € / Nacht / Person</h2>
+        <div className="flex gap-2"><button onClick={suggest} className="text-xs px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 font-semibold">💡 Vorschlag aus Historie</button><Btn kind="ok" size="sm" onClick={save}>{saving?"…":"Speichern"}</Btn></div>
+      </div>
+      <p className="text-xs text-slate-400 mb-3">Historie-Basiswert: <b>{cur(baseline)}</b> / Nacht / Person ({personNights} Personennächte · {cur(invoiced)} fakturiert). „Vorschlag" füllt Ziel/Floor – danach anpassen & speichern.</p>
+      <div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead><tr className="text-xs uppercase text-slate-500"><th className="text-left p-2">Zimmertyp</th>{BANDS.map(([b,l])=><th key={b} className="text-left p-2">{l}</th>)}</tr></thead>
+        <tbody>{TYPES.map(([t,tl])=>(<tr key={t} className="border-t border-slate-100">
+          <td className="p-2 font-medium text-slate-700">{tl}</td>
+          {BANDS.map(([b])=>(<td key={b} className="p-2">
+            <div className="flex items-center gap-1"><span className="text-[10px] text-slate-400 w-9">Ziel</span><input type="number" min="0" value={cell(t,b,"guidance_pp_night")} onChange={e=>setCell(t,b,"guidance_pp_night",e.target.value)} className="w-20 border border-slate-300 rounded px-1.5 py-1 text-sm"/></div>
+            <div className="flex items-center gap-1 mt-1"><span className="text-[10px] text-rose-400 w-9">Floor</span><input type="number" min="0" value={cell(t,b,"floor_pp_night")} onChange={e=>setCell(t,b,"floor_pp_night",e.target.value)} className="w-20 border border-rose-200 rounded px-1.5 py-1 text-sm"/></div>
+          </td>))}
+        </tr>))}</tbody>
+      </table></div>
+    </Card>
+    <Card className="p-5">
+      <h2 className="font-semibold text-slate-800 mb-3">Angebots-Rechner</h2>
+      <div className="flex flex-wrap items-end gap-3">
+        <div><div className="text-xs text-slate-400 mb-1">Zimmertyp</div><select value={calc.type} onChange={e=>setCalc(c=>({...c,type:+e.target.value}))} className={selCls}>{TYPES.map(([t,l])=><option key={t} value={t}>{l}</option>)}</select></div>
+        <div><div className="text-xs text-slate-400 mb-1">Personen</div><input type="number" min="1" value={calc.persons} onChange={e=>setCalc(c=>({...c,persons:e.target.value}))} className={selCls+" w-24"}/></div>
+        <div><div className="text-xs text-slate-400 mb-1">Nächte</div><input type="number" min="1" value={calc.nights} onChange={e=>setCalc(c=>({...c,nights:e.target.value}))} className={selCls+" w-24"}/></div>
+        <div><div className="text-xs text-slate-400 mb-1">Angebot €/N/P</div><input type="number" min="0" value={calc.offer} onChange={e=>setCalc(c=>({...c,offer:e.target.value}))} placeholder="optional" className={selCls+" w-28"}/></div>
+      </div>
+      <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Band</div><div className="font-semibold text-slate-800">{({short:"Kurz",week:"Woche",month:"Langzeit"})[cb]}</div></div>
+        <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Ziel €/N/P</div><div className="font-semibold text-slate-800">{guid?cur(guid):"—"}</div></div>
+        <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Floor €/N/P</div><div className="font-semibold text-rose-600">{floor?cur(floor):"—"}</div></div>
+        <div className="bg-blue-50 rounded-xl p-3"><div className="text-xs text-slate-400">Ziel gesamt</div><div className="font-bold text-blue-700">{guid?cur(totGuid):"—"}</div></div>
+      </div>
+      {offerStatus&&<div className={"mt-3 rounded-xl px-3 py-2 text-sm font-semibold "+offerStatus[1]}>{offerStatus[0]} · Angebot gesamt {cur(offer*(+calc.persons||0)*(+calc.nights||0))}</div>}
+      {!guid&&<p className="text-xs text-amber-600 mt-2">Für diese Kombination ist noch kein Zielpreis gesetzt – oben in der Matrix eintragen.</p>}
+    </Card>
+    <Card className="p-5">
+      <h2 className="font-semibold text-slate-800 mb-1">Firmen-Historie (Referenz)</h2>
+      <p className="text-xs text-slate-400 mb-3">Was Firmen bisher gezahlt haben (aus Qonto-Rechnungen) – Orientierung fürs Preisgespräch.</p>
+      <div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">Firma</th><th className="text-right p-2">Rechn.</th><th className="text-right p-2">Ø Betrag</th><th className="text-right p-2">Letzte</th><th className="text-left p-2 pl-3">zuletzt · Haus</th></tr></thead>
+        <tbody>{firms.map(f=>(<tr key={f.c} className="border-t border-slate-100"><td className="p-2 text-slate-700">{f.c}</td><td className="p-2 text-right text-slate-500">{f.n}</td><td className="p-2 text-right text-slate-700">{cur(f.avg)}</td><td className="p-2 text-right text-slate-700">{cur(f.last?.amount)}</td><td className="p-2 pl-3 text-slate-400 text-xs">{fmt(f.last?.issue_date)} · {f.last?.house||"—"}</td></tr>))}
+          {!firms.length&&<tr><td colSpan="5" className="p-4 text-center text-slate-400">Keine Rechnungsdaten.</td></tr>}</tbody>
+      </table></div>
+    </Card>
+    <p className="text-xs text-slate-400">Gate-Regel: Angebote unter dem Floor brauchen Jarnes Freigabe. Diese Leitplanken dienen Slavik/dem Team – gespeist aus Vergangenheitsdaten, jederzeit anpassbar.</p>
+  </div>);
+}
+
+const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["price","Pricing","🏷"],["acct","Rechnungswesen","🧾"],["msg","Meldungen","📨"],["set","Einstellungen","⚙️"]];
 function Admin({session}) {
   const [view,setView]=useState("over");
   const [bump,setBump]=useState(0);
@@ -1694,7 +1161,7 @@ function Admin({session}) {
   const logout=()=>sb.auth.signOut();
   const refresh=()=>{ setBump(b=>b+1); toast("Aktualisiert"); };
   const Body={over:<Cockpit go={go} bump={bump}/>,res:<Reservations bump={bump}/>,rooms:<Rooms bump={bump}/>,checkins:<CheckIns bump={bump}/>,
-    ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Meldungen bump={bump}/>,inbox:<Postfach bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
+    ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,price:<Pricing bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Meldungen bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
   return (
     <div className="min-h-screen">
       <header className="bg-slate-900 text-white sticky top-0 z-40">
@@ -1718,13 +1185,11 @@ function Admin({session}) {
 
 function App() {
   const [session,setSession]=useState(undefined);
-  const [guest,setGuest]=useState(()=>{ try{ return !!(new URLSearchParams(window.location.search).get("code")); }catch(e){ return false; } });
+  const [guest,setGuest]=useState(false);
   useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session));
     const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
   let body;
-  const coToken=(()=>{ try{ return new URLSearchParams(window.location.search).get("checkout"); }catch(e){ return null; } })();
-  if(coToken) body=<Checkout token={coToken}/>;
-  else if(guest) body=<Guest onAdmin={()=>setGuest(false)}/>;
+  if(guest) body=<Guest onAdmin={()=>setGuest(false)}/>;
   else if(session===undefined) body=<div className="min-h-screen flex items-center justify-center text-slate-400">Lädt…</div>;
   else if(!session) body=<Login onGuest={()=>setGuest(true)}/>;
   else body=<Admin session={session}/>;
