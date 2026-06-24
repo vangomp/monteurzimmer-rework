@@ -1076,8 +1076,8 @@ function Pricing({bump}){
   const [calc,setCalc]=useState({type:1,persons:1,nights:3,offer:""});
   const [saving,setSaving]=useState(false);
   if(!rules||!res||!inv) return <Skeleton/>;
-  const TYPES=[[1,"Einzelzimmer · 1P"],[2,"Doppelzimmer · 2P"],[3,"Dreibettzimmer · 3P"]];
-  const BANDS=[["short","Kurz · ≤6 Nächte"],["week","Woche · 7–27 N."],["month","Langzeit · ≥28 N."]];
+  const TYPES=[[1,"Einzelzimmer"],[2,"Doppelzimmer"],[3,"Mehrpersonenzimmer"]];
+  const BANDS=[["lt1","Unter 1 Monat"],["1to3","1–3 Monate"],["gt3","Länger als 3 Monate"]];
   const k=(t,b)=>t+"_"+b;
   const ruleMap={}; rules.forEach(r=>ruleMap[k(r.room_type,r.stay_band)]=r);
   const cell=(t,b,f)=> (draft[k(t,b)]&&draft[k(t,b)][f]!==undefined)?draft[k(t,b)][f]:(ruleMap[k(t,b)]?.[f] ?? "");
@@ -1087,21 +1087,23 @@ function Pricing({bump}){
   let personNights=0; res.forEach(r=>{ personNights+=nights(r)*(r.persons||r.rooms?.capacity||1); });
   const invoiced=inv.filter(x=>(x.status||"").toLowerCase()!=="canceled").reduce((a,x)=>a+(+x.amount||0),0);
   const baseline=personNights?Math.round(invoiced/personNights*100)/100:0;
-  const bandFactor={short:1.15,week:1.0,month:0.8}, typeFactor={1:1.0,2:0.92,3:0.85};
+  const bandFactor={lt1:1.15,"1to3":1.0,gt3:0.85}, typeFactor={1:1.0,2:0.92,3:0.85};
   const suggest=()=>{ if(!baseline)return toast("Zu wenig Historie für Vorschlag","err"); const d={}; TYPES.forEach(([t])=>BANDS.forEach(([b])=>{ const g=Math.max(1,Math.round(baseline*bandFactor[b]*typeFactor[t])); d[k(t,b)]={guidance_pp_night:g,floor_pp_night:Math.round(g*0.8)}; })); setDraft(d); toast("Vorschlag aus Historie eingesetzt – bitte prüfen & speichern"); };
   const save=async()=>{ setSaving(true); try{
     const rows=[]; TYPES.forEach(([t])=>BANDS.forEach(([b])=>{ const g=cell(t,b,"guidance_pp_night"), fl=cell(t,b,"floor_pp_night"); if(g!==""||fl!=="") rows.push({room_type:t,stay_band:b,guidance_pp_night:g===""?null:+g,floor_pp_night:fl===""?null:+fl,updated_at:new Date().toISOString()}); }));
     if(rows.length){ const {error}=await sb.from("pricing_rules").upsert(rows,{onConflict:"room_type,stay_band"}); if(error)throw error; }
     toast("Pricing gespeichert"); setDraft({}); reload(); }catch(e){err(e);}finally{setSaving(false);} };
-  const bandForNights=(n)=> n>=28?"month":n>=7?"week":"short";
+  const bandForNights=(n)=> n>90?"gt3":n>=30?"1to3":"lt1";
   const cb=bandForNights(+calc.nights||0);
   const gRule=ruleMap[k(+calc.type,cb)]||{};
   const guid=+gRule.guidance_pp_night||0, floor=+gRule.floor_pp_night||0;
   const offer=parseFloat(calc.offer);
   const totGuid=guid*(+calc.persons||0)*(+calc.nights||0);
   const offerStatus = isNaN(offer)?null : offer>=guid?["Über/auf Zielpreis ✓","bg-emerald-100 text-emerald-700"] : offer>=floor?["Unter Ziel, über Floor – ok mit Begründung","bg-amber-100 text-amber-700"] : ["🚧 Unter Floor – Freigabe von Jarne nötig (Gate)","bg-rose-100 text-rose-700"];
-  const byFirm={}; inv.filter(x=>(x.status||"").toLowerCase()!=="canceled").forEach(x=>{ const c=x.company||"—"; (byFirm[c]=byFirm[c]||[]).push(x); });
-  const firms=Object.entries(byFirm).map(([c,list])=>{ const last=list.slice().sort((a,b)=>(b.issue_date||"").localeCompare(a.issue_date||""))[0]; return {c,n:list.length,last,avg:Math.round(list.reduce((a,x)=>a+(+x.amount||0),0)/list.length)}; }).sort((a,b)=>b.n-a.n).slice(0,12);
+  const norm=(s)=>(s||"").toLowerCase().replace(/\s+/g," ").trim();
+  const invByFirm={}; inv.filter(x=>(x.status||"").toLowerCase()!=="canceled").forEach(x=>{ const n=norm(x.company); invByFirm[n]=(invByFirm[n]||0)+(+x.amount||0); });
+  const fg={}; res.forEach(r=>{ const name=r.guest_name||"—"; const key=norm(name); if(!key||key==="—")return; const g=fg[key]=fg[key]||{name,persons:0,pn:0,nl:[],t:{1:0,2:0,3:0}}; const n=nights(r); const p=r.persons||r.rooms?.capacity||1; const cap=r.rooms?.capacity||1; const rt=cap>=3?3:(cap||1); g.persons+=p; g.pn+=n*p; if(n>0)g.nl.push(n); g.t[rt]=(g.t[rt]||0)+1; });
+  const firms=Object.values(fg).map(g=>{ const avgN=g.nl.length?g.nl.reduce((a,b)=>a+b,0)/g.nl.length:0; const it=invByFirm[norm(g.name)]||0; const tl=[g.t[1]?g.t[1]+"× Einzel":0,g.t[2]?g.t[2]+"× Doppel":0,g.t[3]?g.t[3]+"× Mehrp.":0].filter(Boolean).join(", ")||"—"; return {name:g.name,persons:g.persons,months:Math.round(avgN/30*10)/10,ppn:g.pn?it/g.pn:0,tl}; }).sort((a,b)=>b.persons-a.persons).slice(0,15);
   const selCls="border border-slate-300 rounded-lg px-2 py-1.5 text-sm";
   return (<div className="space-y-5">
     <PageHead title="Pricing" sub="Leitplanken € / Nacht / Person · Floor = Minimum · Guidance = Ziel · Gate = unter Floor braucht Freigabe"/>
@@ -1131,7 +1133,7 @@ function Pricing({bump}){
         <div><div className="text-xs text-slate-400 mb-1">Angebot €/N/P</div><input type="number" min="0" value={calc.offer} onChange={e=>setCalc(c=>({...c,offer:e.target.value}))} placeholder="optional" className={selCls+" w-28"}/></div>
       </div>
       <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Band</div><div className="font-semibold text-slate-800">{({short:"Kurz",week:"Woche",month:"Langzeit"})[cb]}</div></div>
+        <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Dauer-Band</div><div className="font-semibold text-slate-800">{({lt1:"Unter 1 Monat","1to3":"1–3 Monate",gt3:">3 Monate"})[cb]}</div></div>
         <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Ziel €/N/P</div><div className="font-semibold text-slate-800">{guid?cur(guid):"—"}</div></div>
         <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Floor €/N/P</div><div className="font-semibold text-rose-600">{floor?cur(floor):"—"}</div></div>
         <div className="bg-blue-50 rounded-xl p-3"><div className="text-xs text-slate-400">Ziel gesamt</div><div className="font-bold text-blue-700">{guid?cur(totGuid):"—"}</div></div>
@@ -1141,11 +1143,11 @@ function Pricing({bump}){
     </Card>
     <Card className="p-5">
       <h2 className="font-semibold text-slate-800 mb-1">Firmen-Historie (Referenz)</h2>
-      <p className="text-xs text-slate-400 mb-3">Was Firmen bisher gezahlt haben (aus Qonto-Rechnungen) – Orientierung fürs Preisgespräch.</p>
+      <p className="text-xs text-slate-400 mb-3">Aus Reservierungen + Qonto. Sortiert nach Anzahl Personen (eine Firma mit vielen Leuten ist wertvoller als viele Einzelne). €/Person/Nacht = Rechnungen ÷ Personennächte.</p>
       <div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">Firma</th><th className="text-right p-2">Rechn.</th><th className="text-right p-2">Ø Betrag</th><th className="text-right p-2">Letzte</th><th className="text-left p-2 pl-3">zuletzt · Haus</th></tr></thead>
-        <tbody>{firms.map(f=>(<tr key={f.c} className="border-t border-slate-100"><td className="p-2 text-slate-700">{f.c}</td><td className="p-2 text-right text-slate-500">{f.n}</td><td className="p-2 text-right text-slate-700">{cur(f.avg)}</td><td className="p-2 text-right text-slate-700">{cur(f.last?.amount)}</td><td className="p-2 pl-3 text-slate-400 text-xs">{fmt(f.last?.issue_date)} · {f.last?.house||"—"}</td></tr>))}
-          {!firms.length&&<tr><td colSpan="5" className="p-4 text-center text-slate-400">Keine Rechnungsdaten.</td></tr>}</tbody>
+        <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">Firma</th><th className="text-right p-2">Personen</th><th className="text-left p-2 pl-3">Zimmertyp(en)</th><th className="text-right p-2">Ø Dauer (Mon.)</th><th className="text-right p-2">€/Person/Nacht</th></tr></thead>
+        <tbody>{firms.map(f=>(<tr key={f.name} className="border-t border-slate-100"><td className="p-2 text-slate-700">{f.name}</td><td className="p-2 text-right font-semibold text-slate-800">{f.persons}</td><td className="p-2 pl-3 text-slate-500 text-xs">{f.tl}</td><td className="p-2 text-right text-slate-700">{f.months||"—"}</td><td className="p-2 text-right text-slate-700">{f.ppn?cur(f.ppn):"—"}</td></tr>))}
+          {!firms.length&&<tr><td colSpan="5" className="p-4 text-center text-slate-400">Keine Daten.</td></tr>}</tbody>
       </table></div>
     </Card>
     <p className="text-xs text-slate-400">Gate-Regel: Angebote unter dem Floor brauchen Jarnes Freigabe. Diese Leitplanken dienen Slavik/dem Team – gespeist aus Vergangenheitsdaten, jederzeit anpassbar.</p>
