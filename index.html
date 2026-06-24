@@ -140,6 +140,7 @@ const loaders = {
   issues: ()=> sb.from("guest_issues").select("*").order("created_at",{ascending:false}).then(r=>r.data||[]),
   qonto: ()=> sb.from("qonto_invoices").select("*").order("issue_date",{ascending:false}).then(r=>r.data||[]),
   pricing: ()=> sb.from("pricing_rules").select("*").then(r=>r.data||[]),
+  companyNotes: ()=> sb.from("company_notes").select("*").then(r=>r.data||[]),
 };
 
 /* ============================ COCKPIT ============================ */
@@ -1072,10 +1073,13 @@ function Pricing({bump}){
   const [rules,reload]=useList(loaders.pricing,[bump]);
   const [res]=useList(loaders.reservations,[bump]);
   const [inv]=useList(loaders.qonto,[bump]);
+  const [notes,reloadNotes]=useList(loaders.companyNotes,[bump]);
   const [draft,setDraft]=useState({});
   const [calc,setCalc]=useState({type:1,persons:1,nights:3,offer:""});
   const [saving,setSaving]=useState(false);
-  if(!rules||!res||!inv) return <Skeleton/>;
+  if(!rules||!res||!inv||!notes) return <Skeleton/>;
+  const noteMap={}; notes.forEach(n=>{noteMap[n.company_key]=n.note;});
+  const saveNote=async(key,name,val)=>{ const {error}=await sb.from("company_notes").upsert({company_key:key,company_name:name,note:val,updated_at:new Date().toISOString()},{onConflict:"company_key"}); if(error)return err(error); reloadNotes(); };
   const TYPES=[[1,"Einzelzimmer"],[2,"Doppelzimmer"],[3,"Mehrpersonenzimmer"]];
   const BANDS=[["lt1","Unter 1 Monat"],["1to3","1–3 Monate"],["gt3","Länger als 3 Monate"]];
   const k=(t,b)=>t+"_"+b;
@@ -1145,9 +1149,9 @@ function Pricing({bump}){
       <h2 className="font-semibold text-slate-800 mb-1">Firmen-Historie (Referenz)</h2>
       <p className="text-xs text-slate-400 mb-3">Aus Reservierungen + Qonto. Sortiert nach Anzahl Personen (eine Firma mit vielen Leuten ist wertvoller als viele Einzelne). €/Person/Nacht = Rechnungen ÷ Personennächte.</p>
       <div className="overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">Firma</th><th className="text-right p-2">Personen</th><th className="text-left p-2 pl-3">Zimmertyp(en)</th><th className="text-right p-2">Ø Dauer (Mon.)</th><th className="text-right p-2">€/Person/Nacht</th></tr></thead>
-        <tbody>{firms.map(f=>(<tr key={f.name} className="border-t border-slate-100"><td className="p-2 text-slate-700">{f.name}</td><td className="p-2 text-right font-semibold text-slate-800">{f.persons}</td><td className="p-2 pl-3 text-slate-500 text-xs">{f.tl}</td><td className="p-2 text-right text-slate-700">{f.months||"—"}</td><td className="p-2 text-right text-slate-700">{f.ppn?cur(f.ppn):"—"}</td></tr>))}
-          {!firms.length&&<tr><td colSpan="5" className="p-4 text-center text-slate-400">Keine Daten.</td></tr>}</tbody>
+        <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">Firma</th><th className="text-right p-2">Personen</th><th className="text-left p-2 pl-3">Zimmertyp(en)</th><th className="text-right p-2">Ø Dauer (Mon.)</th><th className="text-right p-2">€/Person/Nacht</th><th className="text-left p-2 pl-3">Notiz (Team + Agenten)</th></tr></thead>
+        <tbody>{firms.map(f=>(<tr key={f.name} className="border-t border-slate-100"><td className="p-2 text-slate-700">{f.name}</td><td className="p-2 text-right font-semibold text-slate-800">{f.persons}</td><td className="p-2 pl-3 text-slate-500 text-xs">{f.tl}</td><td className="p-2 text-right text-slate-700">{f.months||"—"}</td><td className="p-2 text-right text-slate-700">{f.ppn?cur(f.ppn):"—"}</td><td className="p-2 pl-3"><input key={noteMap[norm(f.name)]||""} defaultValue={noteMap[norm(f.name)]||""} onBlur={e=>{const v=e.target.value;if(v!==(noteMap[norm(f.name)]||""))saveNote(norm(f.name),f.name,v);}} placeholder="Notiz…" className="w-48 border border-slate-200 rounded px-2 py-1 text-xs"/></td></tr>))}
+          {!firms.length&&<tr><td colSpan="6" className="p-4 text-center text-slate-400">Keine Daten.</td></tr>}</tbody>
       </table></div>
     </Card>
     <p className="text-xs text-slate-400">Gate-Regel: Angebote unter dem Floor brauchen Jarnes Freigabe. Diese Leitplanken dienen Slavik/dem Team – gespeist aus Vergangenheitsdaten, jederzeit anpassbar.</p>
