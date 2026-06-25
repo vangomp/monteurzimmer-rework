@@ -132,7 +132,7 @@ const loaders = {
   objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
   checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
-  anmeldungen: ()=> sb.from("check_ins").select("id, full_name, checked_in_at, wgb_issued_at, reservations(guest_name, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(code,name,address)))").order("checked_in_at",{ascending:false}).then(r=>r.data||[]),
+  anmeldungen: ()=> sb.from("check_ins").select("id, full_name, birth_date, birth_place, checked_in_at, wgb_issued_at, reservations(guest_name, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(code,name,address)))").order("checked_in_at",{ascending:false}).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
@@ -718,10 +718,29 @@ function SettingsView({onLogout,email,bump}) {
       <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">Konto</h2>
         <p className="text-sm text-slate-500 mb-3">Angemeldet als {email}</p><Btn kind="soft" onClick={onLogout}>Abmelden</Btn></Card>
       <HouseRulesEditor/>
+      <WgbSettingsEditor/>
       <Card className="p-5"><h2 className="font-semibold text-slate-800 mb-2">📨 Kommunikation</h2>
         <p className="text-sm text-slate-500">Adaptiv: Antwort auf dem Kanal des Gastes (WhatsApp / Sipgate / E-Mail). Start mit E-Mail.</p></Card>
     </div>
   );
+}
+function WgbSettingsEditor(){
+  const [cfg,setCfg]=useState(null); const [saving,setSaving]=useState(false);
+  useEffect(()=>{ sb.from("settings").select("value").eq("key","wgb").maybeSingle().then(({data})=>setCfg(data?.value||{wohnungsgeber_name:"",wohnungsgeber_anschrift:"",eigentuemer:"",ort:"",body:""})); },[]);
+  if(!cfg) return null;
+  const u=(k,v)=>setCfg(c=>({...c,[k]:v}));
+  const save=async()=>{ setSaving(true); const {error}=await sb.from("settings").update({value:cfg,updated_at:new Date().toISOString()}).eq("key","wgb"); setSaving(false); if(error)return err(error); toast("WGB-Vorlage gespeichert"); };
+  return (<Card className="p-5"><h2 className="font-semibold text-slate-800 mb-1">🏷 Wohnungsgeberbescheinigung – Vorlage</h2>
+    <p className="text-sm text-slate-500 mb-3">Diese Angaben werden automatisch in jede erzeugte Wohnungsgeberbestätigung eingesetzt (Anmeldungen-Tab).</p>
+    <div className="grid sm:grid-cols-2 gap-3">
+      <Field label="Wohnungsgeber (Name)"><input className={inputCls} value={cfg.wohnungsgeber_name||""} onChange={e=>u("wohnungsgeber_name",e.target.value)}/></Field>
+      <Field label="Anschrift Wohnungsgeber"><input className={inputCls} value={cfg.wohnungsgeber_anschrift||""} onChange={e=>u("wohnungsgeber_anschrift",e.target.value)}/></Field>
+      <Field label="Eigentümer (falls abweichend)"><input className={inputCls} value={cfg.eigentuemer||""} onChange={e=>u("eigentuemer",e.target.value)}/></Field>
+      <Field label="Ort (Unterschriftzeile)"><input className={inputCls} value={cfg.ort||""} onChange={e=>u("ort",e.target.value)}/></Field>
+    </div>
+    <Field label="Bestätigungstext"><textarea className={inputCls+" h-20"} value={cfg.body||""} onChange={e=>u("body",e.target.value)}/></Field>
+    <Btn kind="ok" onClick={save}>{saving?"…":"Speichern"}</Btn>
+  </Card>);
 }
 
 /* ============================ GUEST PORTAL ============================ */
@@ -1074,6 +1093,8 @@ function Anmeldungen({bump}){
   const [rows,reload]=useList(loaders.anmeldungen,[bump]);
   const [fHouse,setFHouse]=useState("");
   const [onlyOpen,setOnlyOpen]=useState(false);
+  const [cfg,setCfg]=useState({});
+  useEffect(()=>{ sb.from("settings").select("value").eq("key","wgb").maybeSingle().then(({data})=>{ if(data?.value) setCfg(data.value); }); },[]);
   if(!rows) return <Skeleton/>;
   const houseOf=(c)=> c.reservations?.rooms?.cleaning_objekte?.code || "—";
   const addrOf=(c)=> c.reservations?.rooms?.cleaning_objekte?.address || "";
@@ -1081,8 +1102,13 @@ function Anmeldungen({bump}){
   const f=rows.filter(c=>(!fHouse||houseOf(c)===fHouse)&&(!onlyOpen||!c.wgb_issued_at));
   const issued=rows.filter(c=>c.wgb_issued_at).length;
   const markWgb=async(c,on)=>{ const {error}=await sb.from("check_ins").update({wgb_issued_at:on?new Date().toISOString():null}).eq("id",c.id); if(error)return err(error); toast(on?"WGB als ausgestellt markiert":"WGB zurückgesetzt"); reload(); };
-  const printWgb=(c)=>{ const person=c.full_name||c.reservations?.guest_name||"—"; const firma=c.reservations?.guest_name||""; const haus=houseOf(c); const addr=addrOf(c); const einzug=c.reservations?.check_in_date;
-    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Wohnungsgeberbestätigung</title><style>body{font-family:Arial,sans-serif;max-width:720px;margin:40px auto;color:#111;line-height:1.55}h1{font-size:20px;margin-bottom:0}.box{border:1px solid #999;border-radius:8px;padding:16px;margin-top:16px}table{width:100%;border-collapse:collapse}td{padding:6px 4px;vertical-align:top}.l{color:#555;width:42%}.sig{margin-top:56px;display:flex;justify-content:space-between}small{color:#666}</style></head><body><h1>Wohnungsgeberbestätigung</h1><small>gemäß § 19 Bundesmeldegesetz (BMG)</small><div class="box"><table><tr><td class="l">Wohnungsgeber / Eigentümer:</td><td>JJ Real Estate GmbH</td></tr><tr><td class="l">Anschrift der Wohnung:</td><td>${haus}${addr?" – "+addr:""}</td></tr><tr><td class="l">Art des meldepflichtigen Vorgangs:</td><td>Einzug</td></tr><tr><td class="l">Einzugsdatum:</td><td>${einzug?fmt(einzug):"____________"}</td></tr><tr><td class="l">Name der meldepflichtigen Person:</td><td>${person}</td></tr>${firma&&firma!==person?`<tr><td class="l">Firma:</td><td>${firma}</td></tr>`:""}</table></div><p style="margin-top:20px">Hiermit wird bestätigt, dass die oben genannte Person in die oben genannte Wohnung eingezogen ist.</p><div class="sig"><div>____________________<br><small>Ort, Datum</small></div><div>____________________<br><small>Unterschrift Wohnungsgeber</small></div></div><script>window.onload=function(){window.print()}<\/script></body></html>`;
+  const saveBirth=async(c,field,val)=>{ const {error}=await sb.from("check_ins").update({[field]:val||null}).eq("id",c.id); if(error)return err(error); reload(); };
+  const printWgb=(c)=>{ const esc=(s)=>String(s==null?"":s).replace(/[<>&]/g,m=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[m]));
+    const person=c.full_name||c.reservations?.guest_name||"—"; const firma=c.reservations?.guest_name||""; const haus=houseOf(c); const addr=addrOf(c); const einzug=c.reservations?.check_in_date;
+    const wgName=cfg.wohnungsgeber_name||"JJ Real Estate GmbH"; const ort=cfg.ort||""; const today=new Date().toLocaleDateString("de-DE");
+    const body=cfg.body||"Hiermit wird gemäß § 19 BMG bestätigt, dass die oben genannte(n) Person(en) in die oben genannte Wohnung eingezogen ist/sind.";
+    const rowsHtml=[["Wohnungsgeber (Name)",wgName],["Anschrift Wohnungsgeber",cfg.wohnungsgeber_anschrift||""],cfg.eigentuemer?["Eigentümer (falls abweichend)",cfg.eigentuemer]:null,["Anschrift der Wohnung",haus+(addr?" – "+addr:"")],["Art des Vorgangs","Einzug"],["Einzugsdatum",einzug?fmt(einzug):"____________"],["Name der meldepflichtigen Person",person],["Geburtsdatum",c.birth_date?fmt(c.birth_date):"____________"],["Geburtsort",c.birth_place||"____________"],(firma&&firma!==person)?["Firma",firma]:null].filter(Boolean).map(r=>`<tr><td class="l">${esc(r[0])}:</td><td>${esc(r[1])}</td></tr>`).join("");
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Wohnungsgeberbestätigung</title><style>body{font-family:Arial,sans-serif;max-width:720px;margin:40px auto;color:#111;line-height:1.55}h1{font-size:20px;margin-bottom:0}.box{border:1px solid #999;border-radius:8px;padding:16px;margin-top:16px}table{width:100%;border-collapse:collapse}td{padding:6px 4px;vertical-align:top}.l{color:#555;width:42%}.sig{margin-top:56px;display:flex;justify-content:space-between}small{color:#666}</style></head><body><h1>Wohnungsgeberbestätigung</h1><small>gemäß § 19 Bundesmeldegesetz (BMG)</small><div class="box"><table>${rowsHtml}</table></div><p style="margin-top:20px">${esc(body)}</p><div class="sig"><div>____________________<br><small>${esc(ort)}${ort?", ":""}${today} · Ort, Datum</small></div><div>____________________<br><small>Unterschrift Wohnungsgeber</small></div></div><script>window.onload=function(){window.print()}<\/script></body></html>`;
     const w=window.open("","_blank"); if(!w){toast("Bitte Popups erlauben","err");return;} w.document.write(html); w.document.close(); if(!c.wgb_issued_at) markWgb(c,true); };
   const selCls="border border-slate-300 rounded-lg px-2 py-1.5 text-xs";
   return (<div className="space-y-4">
@@ -1095,7 +1121,8 @@ function Anmeldungen({bump}){
     <Card className="overflow-x-auto"><table className="w-full text-sm">
       <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-3">Person</th><th className="text-left p-3">Firma</th><th className="text-left p-3">Haus</th><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Einzug</th><th className="text-left p-3">Wohnungsgeberbescheinigung</th><th className="text-right p-3">Aktion</th></tr></thead>
       <tbody>{f.map(c=>(<tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
-        <td className="p-3 font-semibold text-slate-800">{c.full_name||"—"}</td>
+        <td className="p-3"><div className="font-semibold text-slate-800">{c.full_name||"—"}</div>
+          <div className="flex gap-1 mt-1"><input type="date" defaultValue={c.birth_date||""} onBlur={e=>{if(e.target.value!==(c.birth_date||""))saveBirth(c,"birth_date",e.target.value);}} title="Geburtsdatum" className="border border-slate-200 rounded px-1 py-0.5 text-[11px] w-32"/><input defaultValue={c.birth_place||""} onBlur={e=>{if(e.target.value!==(c.birth_place||""))saveBirth(c,"birth_place",e.target.value);}} placeholder="Geburtsort" className="border border-slate-200 rounded px-1 py-0.5 text-[11px] w-28"/></div></td>
         <td className="p-3 text-slate-600">{c.reservations?.guest_name||"—"}</td>
         <td className="p-3 text-slate-700">{houseOf(c)}{addrOf(c)?<span className="block text-xs text-slate-400">{addrOf(c)}</span>:null}</td>
         <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
