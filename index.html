@@ -132,6 +132,7 @@ const loaders = {
   objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
   checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
+  anmeldungen: ()=> sb.from("check_ins").select("id, full_name, checked_in_at, wgb_issued_at, reservations(guest_name, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(code,name,address)))").order("checked_in_at",{ascending:false}).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
@@ -1068,6 +1069,49 @@ function Meldungen({bump}) {
 }
 
 /* ============================ SHELL ============================ */
+/* ============================ ANMELDUNGEN (WGB) ============================ */
+function Anmeldungen({bump}){
+  const [rows,reload]=useList(loaders.anmeldungen,[bump]);
+  const [fHouse,setFHouse]=useState("");
+  const [onlyOpen,setOnlyOpen]=useState(false);
+  if(!rows) return <Skeleton/>;
+  const houseOf=(c)=> c.reservations?.rooms?.cleaning_objekte?.code || "—";
+  const addrOf=(c)=> c.reservations?.rooms?.cleaning_objekte?.address || "";
+  const houses=[...new Set(rows.map(houseOf))].filter(h=>h&&h!=="—").sort();
+  const f=rows.filter(c=>(!fHouse||houseOf(c)===fHouse)&&(!onlyOpen||!c.wgb_issued_at));
+  const issued=rows.filter(c=>c.wgb_issued_at).length;
+  const markWgb=async(c,on)=>{ const {error}=await sb.from("check_ins").update({wgb_issued_at:on?new Date().toISOString():null}).eq("id",c.id); if(error)return err(error); toast(on?"WGB als ausgestellt markiert":"WGB zurückgesetzt"); reload(); };
+  const printWgb=(c)=>{ const person=c.full_name||c.reservations?.guest_name||"—"; const firma=c.reservations?.guest_name||""; const haus=houseOf(c); const addr=addrOf(c); const einzug=c.reservations?.check_in_date;
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Wohnungsgeberbestätigung</title><style>body{font-family:Arial,sans-serif;max-width:720px;margin:40px auto;color:#111;line-height:1.55}h1{font-size:20px;margin-bottom:0}.box{border:1px solid #999;border-radius:8px;padding:16px;margin-top:16px}table{width:100%;border-collapse:collapse}td{padding:6px 4px;vertical-align:top}.l{color:#555;width:42%}.sig{margin-top:56px;display:flex;justify-content:space-between}small{color:#666}</style></head><body><h1>Wohnungsgeberbestätigung</h1><small>gemäß § 19 Bundesmeldegesetz (BMG)</small><div class="box"><table><tr><td class="l">Wohnungsgeber / Eigentümer:</td><td>JJ Real Estate GmbH</td></tr><tr><td class="l">Anschrift der Wohnung:</td><td>${haus}${addr?" – "+addr:""}</td></tr><tr><td class="l">Art des meldepflichtigen Vorgangs:</td><td>Einzug</td></tr><tr><td class="l">Einzugsdatum:</td><td>${einzug?fmt(einzug):"____________"}</td></tr><tr><td class="l">Name der meldepflichtigen Person:</td><td>${person}</td></tr>${firma&&firma!==person?`<tr><td class="l">Firma:</td><td>${firma}</td></tr>`:""}</table></div><p style="margin-top:20px">Hiermit wird bestätigt, dass die oben genannte Person in die oben genannte Wohnung eingezogen ist.</p><div class="sig"><div>____________________<br><small>Ort, Datum</small></div><div>____________________<br><small>Unterschrift Wohnungsgeber</small></div></div><script>window.onload=function(){window.print()}<\/script></body></html>`;
+    const w=window.open("","_blank"); if(!w){toast("Bitte Popups erlauben","err");return;} w.document.write(html); w.document.close(); if(!c.wgb_issued_at) markWgb(c,true); };
+  const selCls="border border-slate-300 rounded-lg px-2 py-1.5 text-xs";
+  return (<div className="space-y-4">
+    <PageHead title="Anmeldungen" sub={`${issued}/${rows.length} mit Wohnungsgeberbescheinigung · wer ist in welchem Haus gemeldet`}/>
+    <Card className="p-4"><div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs font-semibold text-slate-500">Filter:</span>
+      <select value={fHouse} onChange={e=>setFHouse(e.target.value)} className={selCls}><option value="">Alle Häuser</option>{houses.map(h=><option key={h} value={h}>{h}</option>)}</select>
+      <label className="text-xs text-slate-500 flex items-center gap-1 cursor-pointer ml-1"><input type="checkbox" checked={onlyOpen} onChange={e=>setOnlyOpen(e.target.checked)} className="accent-blue-600"/> nur ohne WGB</label>
+    </div></Card>
+    <Card className="overflow-x-auto"><table className="w-full text-sm">
+      <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-3">Person</th><th className="text-left p-3">Firma</th><th className="text-left p-3">Haus</th><th className="text-left p-3">Zimmer</th><th className="text-left p-3">Einzug</th><th className="text-left p-3">Wohnungsgeberbescheinigung</th><th className="text-right p-3">Aktion</th></tr></thead>
+      <tbody>{f.map(c=>(<tr key={c.id} className="border-t border-slate-100 hover:bg-slate-50">
+        <td className="p-3 font-semibold text-slate-800">{c.full_name||"—"}</td>
+        <td className="p-3 text-slate-600">{c.reservations?.guest_name||"—"}</td>
+        <td className="p-3 text-slate-700">{houseOf(c)}{addrOf(c)?<span className="block text-xs text-slate-400">{addrOf(c)}</span>:null}</td>
+        <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
+        <td className="p-3 text-slate-600 whitespace-nowrap">{fmt(c.reservations?.check_in_date)}</td>
+        <td className="p-3">{c.wgb_issued_at?<Pill text={`ausgestellt ${fmt(c.wgb_issued_at)}`} cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
+        <td className="p-3 text-right whitespace-nowrap">
+          <button onClick={()=>printWgb(c)} className="text-xs px-2.5 py-1 rounded-lg bg-blue-100 text-blue-700 font-semibold">📄 WGB drucken</button>
+          <button onClick={()=>markWgb(c,!c.wgb_issued_at)} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 font-semibold ml-1">{c.wgb_issued_at?"↩ zurücksetzen":"✓ ausgestellt"}</button>
+        </td>
+      </tr>))}
+        {!f.length&&<tr><td colSpan="7" className="p-6 text-center text-slate-400">Keine Anmeldungen.</td></tr>}</tbody>
+    </table></Card>
+    <p className="text-xs text-slate-400">„WGB drucken" öffnet eine vorausgefüllte Wohnungsgeberbestätigung (§19 BMG) zum Drucken/Speichern und markiert sie als ausgestellt. Wohnungsgeber-/Adressdaten je Haus kommen aus der Objektverwaltung.</p>
+  </div>);
+}
+
 /* ============================ PRICING ============================ */
 function Pricing({bump}){
   const [rules,reload]=useList(loaders.pricing,[bump]);
@@ -1158,7 +1202,7 @@ function Pricing({bump}){
   </div>);
 }
 
-const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["price","Pricing","🏷"],["acct","Rechnungswesen","🧾"],["msg","Meldungen","📨"],["set","Einstellungen","⚙️"]];
+const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["anm","Anmeldungen","📋"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["price","Pricing","🏷"],["acct","Rechnungswesen","🧾"],["msg","Meldungen","📨"],["set","Einstellungen","⚙️"]];
 function Admin({session}) {
   const [view,setView]=useState("over");
   const [bump,setBump]=useState(0);
@@ -1167,7 +1211,7 @@ function Admin({session}) {
   const logout=()=>sb.auth.signOut();
   const refresh=()=>{ setBump(b=>b+1); toast("Aktualisiert"); };
   const Body={over:<Cockpit go={go} bump={bump}/>,res:<Reservations bump={bump}/>,rooms:<Rooms bump={bump}/>,checkins:<CheckIns bump={bump}/>,
-    ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,price:<Pricing bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Meldungen bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
+    anm:<Anmeldungen bump={bump}/>,ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,price:<Pricing bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Meldungen bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
   return (
     <div className="min-h-screen">
       <header className="bg-slate-900 text-white sticky top-0 z-40">
