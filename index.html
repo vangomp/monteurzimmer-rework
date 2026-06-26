@@ -142,6 +142,11 @@ const loaders = {
   qonto: ()=> sb.from("qonto_invoices").select("*").order("issue_date",{ascending:false}).then(r=>r.data||[]),
   pricing: ()=> sb.from("pricing_rules").select("*").then(r=>r.data||[]),
   companyNotes: ()=> sb.from("company_notes").select("*").then(r=>r.data||[]),
+  followups: ()=> sb.from("follow_ups").select("*").order("created_at",{ascending:false}).then(r=>r.data||[]),
+  companyThreads: ()=> sb.from("company_threads").select("*, companies(id,name,display_name,logo_url,accent_color)").order("last_message_at",{ascending:false,nullsFirst:false}).then(r=>r.data||[]),
+  companyMsgs: ()=> sb.from("messages").select("*").order("created_at").then(r=>r.data||[]),
+  houseThreads: ()=> sb.from("house_threads").select("*, cleaning_objekte(code,name)").order("last_message_at",{ascending:false,nullsFirst:false}).then(r=>r.data||[]),
+  houseMsgs: ()=> sb.from("house_messages").select("*").order("created_at").then(r=>r.data||[]),
 };
 
 /* ============================ COCKPIT ============================ */
@@ -152,7 +157,9 @@ function Cockpit({go,bump}) {
   const [ext]=useList(loaders.extensions,[bump]);
   const [issues]=useList(loaders.issues,[bump]);
   const [qi]=useList(loaders.qonto,[bump]);
-  if(!rooms||!res||!nuki||!ext||!issues||!qi) return <Skeleton/>;
+  const [fups,reloadFups]=useList(loaders.followups,[bump]);
+  const [fuText,setFuText]=useState("");
+  if(!rooms||!res||!nuki||!ext||!issues||!qi||!fups) return <Skeleton/>;
   const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0); // checked in, incl. überfällig
   const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0 && daysFromToday(r.check_out_date)<0);
   const leaving=active.filter(r=>{const d=daysFromToday(r.check_out_date);return d>=0&&d<=3;});
@@ -190,9 +197,27 @@ function Cockpit({go,bump}) {
   if(doorBatDue.length) todo.push(["🔋",`${doorBatDue.length} Zimmer: Türschloss-Akku fällig (>6 Mon.)`,"Zimmer",()=>go("rooms"),"amber"]);
   if(!todo.length) todo.push(["✅","Nichts Dringendes – alles im grünen Bereich.","",null,"emerald"]);
   const toneCls={amber:"border-amber-300 bg-amber-50",rose:"border-rose-300 bg-rose-50",blue:"border-blue-300 bg-blue-50",emerald:"border-emerald-300 bg-emerald-50"};
+  const openFups=fups.filter(f=>f.status!=="done");
+  const addFu=async()=>{ const t=fuText.trim(); if(!t)return; const {error}=await sb.from("follow_ups").insert({text:t,created_by:"Jarne",status:"open"}); if(error)return err(error); setFuText(""); toast("Follow-up hinzugefügt"); reloadFups(); };
+  const doneFu=async(f)=>{ const {error}=await sb.from("follow_ups").update({status:"done",done_at:new Date().toISOString()}).eq("id",f.id); if(error)return err(error); reloadFups(); };
+  const delFu=async(f)=>{ if(!confirm("Follow-up löschen?"))return; const {error}=await sb.from("follow_ups").delete().eq("id",f.id); if(error)return err(error); reloadFups(); };
   return (
     <div className="space-y-6">
       <PageHead title="Cockpit" sub="Live aus Supabase."/>
+      <Card className="p-5 border-l-4 border-l-indigo-400">
+        <h2 className="font-semibold text-slate-800 mb-2">📌 Follow-ups / Wartet auf…</h2>
+        <div className="space-y-2 mb-3">{openFups.length?openFups.map(f=>(
+          <div key={f.id} className="flex items-start gap-2 bg-indigo-50/60 border border-indigo-100 rounded-lg px-3 py-2">
+            <button onClick={()=>doneFu(f)} title="Erledigt" className="text-emerald-600 font-bold mt-0.5">✓</button>
+            <div className="flex-1 text-sm text-slate-700">{f.text}{f.ref?<span className="text-xs text-slate-400"> · {f.ref}</span>:null}<div className="text-[11px] text-slate-400">{f.created_by||"—"} · {fmt(f.created_at)}</div></div>
+            <button onClick={()=>delFu(f)} title="Löschen" className="text-slate-300 hover:text-rose-500">✕</button>
+          </div>)):<p className="text-sm text-slate-400">Keine offenen Follow-ups.</p>}
+        </div>
+        <div className="flex gap-2">
+          <input value={fuText} onChange={e=>setFuText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addFu()} placeholder="z.B. Slavik wartet auf Zahlungsbestätigung – Reservierung M79DGU vor Live-Schaltung" className="flex-1 border border-slate-300 rounded-lg px-3 py-1.5 text-sm"/>
+          <Btn kind="ok" size="sm" onClick={addFu}>+ Follow-up</Btn>
+        </div>
+      </Card>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[["Belegung heute",occToday+"%",`${rooms.filter(r=>r.status==="occupied").length}/${rooms.length} Zimmer`,"occ"],
           ["Ø Belegung YTD",occWin(yStart,TODAY)+"%","seit Jahresbeginn","occ"],
@@ -750,6 +775,9 @@ function Guest({onAdmin}) {
   const [phase,setPhase]=useState("idle"),[detected,setDetected]=useState({});
   const [hr,setHr]=useState([]); const [glang,setGlang]=useState("de");
   const [issue,setIssue]=useState({category:"",message:""}); const [issueSent,setIssueSent]=useState(false);
+  const [inbox,setInbox]=useState(null); const [gmsg,setGmsg]=useState("");
+  useEffect(()=>{ if(booking?.code) sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})).catch(()=>setInbox({messages:[],infos:[]})); },[booking]);
+  const sendG=async()=>{ if(!gmsg.trim()||!booking?.code)return; const {error}=await sb.rpc("mz_guest_send",{p_code:booking.code,p_body:gmsg.trim()}); if(error)return err(error); setGmsg(""); sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})); };
   useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
   const lookup=async()=>{ if(!code.trim())return; setBusy(true);
     const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link,photos,intro_video_url)").eq("code",code.trim().toUpperCase()).maybeSingle();
@@ -793,6 +821,17 @@ function Guest({onAdmin}) {
           <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">{room.wifi_password||"—"}</div></div>
         </div>
         {room.whatsapp_url&&<a href={room.whatsapp_url} target="_blank" rel="noreferrer" className="block text-center mt-3 bg-emerald-600 text-white rounded-xl py-2.5 text-sm font-semibold">💬 WhatsApp-Gruppe öffnen</a>}
+      </Card>
+      <Card className="p-5">
+        <h3 className="font-semibold text-slate-800 mb-2">📣 Infos & Nachrichten</h3>
+        {Array.isArray(inbox?.infos)&&inbox.infos.length>0&&<div className="space-y-2 mb-3">{inbox.infos.map(i=>(
+          <div key={i.id} className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">📢 {i.body}</div>))}</div>}
+        <div className="space-y-2 max-h-60 overflow-y-auto mb-3">{(inbox?.messages||[]).map(m=>(
+          <div key={m.id} className={"max-w-[85%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-slate-100 text-slate-800":"ml-auto bg-blue-600 text-white")}>{m.body}</div>))}
+          {inbox&&!inbox.messages?.length&&<p className="text-sm text-slate-400">Noch keine Nachrichten – schreib uns bei Fragen oder Problemen.</p>}
+          {!inbox&&<p className="text-sm text-slate-400">Lädt…</p>}
+        </div>
+        <div className="flex gap-2"><input value={gmsg} onChange={e=>setGmsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendG()} placeholder="Nachricht an das Team…" className={inputCls}/><Btn onClick={sendG}>Senden</Btn></div>
       </Card>
       {Array.isArray(room.photos)&&room.photos.length>0&&<Card className="p-5">
         <h3 className="font-semibold text-slate-800 mb-2">📷 Dein Zimmer</h3>
@@ -1067,6 +1106,82 @@ function Accounting({bump}) {
   );
 }
 
+/* ============================ GÄSTEKOMMUNIKATION ============================ */
+function Gaestekommunikation({bump}){
+  const [mode,setMode]=useState("firma");
+  const [sel,setSel]=useState(null);
+  const [reply,setReply]=useState("");
+  const [bcOpen,setBcOpen]=useState(false);
+  const [bcBody,setBcBody]=useState(""); const [bcHouses,setBcHouses]=useState([]);
+  const [cThreads,reloadCT]=useList(loaders.companyThreads,[bump]);
+  const [cMsgs,reloadCM]=useList(loaders.companyMsgs,[bump]);
+  const [hThreads,reloadHT]=useList(loaders.houseThreads,[bump]);
+  const [hMsgs,reloadHM]=useList(loaders.houseMsgs,[bump]);
+  const [objekte]=useList(loaders.objekte,[bump]);
+  if(!cThreads||!cMsgs||!hThreads||!hMsgs) return <Skeleton/>;
+  const threads=mode==="firma"?cThreads:hThreads;
+  const msgs=mode==="firma"?cMsgs:hMsgs;
+  const nameOf=(t)=> mode==="firma"?(t.companies?.display_name||t.companies?.name||"Firma"):(t.cleaning_objekte?.code||"Haus");
+  const msgsOf=(tid)=> msgs.filter(m=>m.thread_id===tid);
+  const lastOf=(t)=>{ const l=msgsOf(t.id); return l[l.length-1]; };
+  const unreadOf=(t)=> msgsOf(t.id).filter(m=>m.sender!=="team"&&!m.read_at).length;
+  const selMsgs=sel?msgsOf(sel):[];
+  const reloadMsgs=()=>{ if(mode==="firma"){reloadCM();reloadCT();}else{reloadHM();reloadHT();} };
+  const send=async()=>{ if(!sel||!reply.trim())return; const tbl=mode==="firma"?"messages":"house_messages"; const tt=mode==="firma"?"company_threads":"house_threads";
+    const payload={thread_id:sel,sender:"team",body:reply.trim(),type:"chat"}; if(mode==="haus")payload.author="Team";
+    const {error}=await sb.from(tbl).insert(payload); if(error)return err(error);
+    await sb.from(tt).update({last_message_at:new Date().toISOString()}).eq("id",sel);
+    setReply(""); reloadMsgs(); };
+  const openThread=async(t)=>{ setSel(t.id); const tbl=mode==="firma"?"messages":"house_messages";
+    const ids=msgsOf(t.id).filter(m=>m.sender!=="team"&&!m.read_at).map(m=>m.id);
+    if(ids.length){ await sb.from(tbl).update({read_at:new Date().toISOString()}).in("id",ids); reloadMsgs(); } };
+  const sendBroadcast=async()=>{ if(!bcBody.trim()||!bcHouses.length)return toast("Text + mind. ein Haus wählen","err");
+    const {error}=await sb.from("broadcasts").insert({body:bcBody.trim(),target_houses:bcHouses,created_by:"Jarne"}); if(error)return err(error);
+    toast("Aushang gesendet an "+bcHouses.length+" Haus/Häuser"); setBcOpen(false); setBcBody(""); setBcHouses([]); };
+  const totalUnread=threads.reduce((a,t)=>a+unreadOf(t),0);
+  return (<div className="space-y-4">
+    <PageHead title="Gästekommunikation" sub={`Chat mit Firmen & Häusern · ${totalUnread} ungelesen`} right={<Btn size="sm" onClick={()=>setBcOpen(true)}>📢 Aushang senden</Btn>}/>
+    <div className="flex gap-1">{[["firma","Nach Firma"],["haus","Nach Haus"]].map(([k,l])=>(
+      <button key={k} onClick={()=>{setMode(k);setSel(null);}} className={"px-3 py-1.5 rounded-lg text-sm font-semibold "+(mode===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>))}</div>
+    <div className="grid md:grid-cols-3 gap-4">
+      <Card className="p-0 overflow-hidden md:col-span-1">
+        <div className="bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{mode==="firma"?"Firmen":"Häuser"} ({threads.length})</div>
+        <div className="divide-y divide-slate-100 max-h-[60vh] overflow-y-auto">{threads.map(t=>{const u=unreadOf(t);const lm=lastOf(t);const on=sel===t.id;return(
+          <button key={t.id} onClick={()=>openThread(t)} className={"w-full text-left px-3 py-2.5 hover:bg-slate-50 "+(on?"bg-blue-50":"")}>
+            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-slate-800 text-sm truncate">{nameOf(t)}</span>{u>0&&<span className="shrink-0"><Pill text={`● persönlich ${u}`} cls="bg-amber-100 text-amber-700"/></span>}</div>
+            <div className="text-xs text-slate-400 truncate">{lm?(lm.sender==="team"?"Du: ":"")+(lm.body||"[Anhang]"):"—"}</div>
+          </button>);})}
+          {!threads.length&&<div className="p-4 text-sm text-slate-400">Noch keine {mode==="firma"?"Firmen-":"Haus-"}Konversationen.</div>}
+        </div>
+      </Card>
+      <Card className="p-0 md:col-span-2 flex flex-col min-h-[60vh]">
+        {!sel?<div className="flex-1 flex items-center justify-center text-slate-400 text-sm p-6">Konversation links wählen.</div>:<React.Fragment>
+          <div className="bg-slate-50 px-4 py-2 font-semibold text-slate-800 border-b border-slate-100">{nameOf(threads.find(t=>t.id===sel)||{})}</div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">{selMsgs.map(m=>(
+            <div key={m.id} className={"max-w-[80%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"ml-auto bg-blue-600 text-white":"bg-slate-100 text-slate-800")}>
+              {m.type&&m.type!=="chat"&&<div className={"text-[10px] font-semibold mb-0.5 "+(m.sender==="team"?"text-blue-100":"text-slate-500")}>{({problem:"🛠 Problem",extension:"📅 Verlängerung",checkout_video:"🎥 Check-out-Video",wgb_request:"📋 WGB-Antrag",info:"📢 Info"})[m.type]||m.type}</div>}
+              <div>{m.body}</div>{m.attachment_path&&<div className="text-[11px] mt-1 opacity-80">📎 Anhang</div>}
+              <div className={"text-[10px] mt-1 "+(m.sender==="team"?"text-blue-100":"text-slate-400")}>{m.author?m.author+" · ":""}{fmt(m.created_at)}</div>
+            </div>))}
+            {!selMsgs.length&&<div className="text-sm text-slate-400 text-center mt-6">Noch keine Nachrichten.</div>}
+          </div>
+          <div className="border-t border-slate-100 p-3 flex gap-2">
+            <input value={reply} onChange={e=>setReply(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Antwort an Gast…" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm"/>
+            <Btn kind="ok" onClick={send}>Senden</Btn>
+          </div>
+        </React.Fragment>}
+      </Card>
+    </div>
+    {bcOpen&&<Modal title="📢 Aushang / Störung senden" onClose={()=>setBcOpen(false)}>
+      <p className="text-xs text-slate-500 mb-2">Geht an alle Firmen, die in den gewählten Häusern aktuell Leute untergebracht haben.</p>
+      <Field label="Nachricht"><textarea className={inputCls+" h-24"} value={bcBody} onChange={e=>setBcBody(e.target.value)} placeholder="z.B. FWS17: Wasser morgen 9–11 Uhr abgestellt."/></Field>
+      <Field label="Häuser"><div className="flex flex-wrap gap-2">{(objekte||[]).map(o=>{const on=bcHouses.includes(o.code);return(
+        <button key={o.id} type="button" onClick={()=>setBcHouses(on?bcHouses.filter(h=>h!==o.code):[...bcHouses,o.code])} className={"px-2.5 py-1 rounded-lg text-xs font-semibold "+(on?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{o.code}</button>);})}</div></Field>
+      <div className="flex justify-end gap-2 mt-3"><Btn kind="soft" onClick={()=>setBcOpen(false)}>Abbrechen</Btn><Btn kind="ok" onClick={sendBroadcast}>Senden</Btn></div>
+    </Modal>}
+  </div>);
+}
+
 /* ============================ MELDUNGEN ============================ */
 function Meldungen({bump}) {
   const [rows,reload]=useList(loaders.issues,[bump]);
@@ -1149,8 +1264,9 @@ function Pricing({bump}){
   const [calc,setCalc]=useState({type:1,persons:1,nights:3,offer:""});
   const [saving,setSaving]=useState(false);
   if(!rules||!res||!inv||!notes) return <Skeleton/>;
-  const noteMap={}; notes.forEach(n=>{noteMap[n.company_key]=n.note;});
+  const noteMap={},ovMap={}; notes.forEach(n=>{noteMap[n.company_key]=n.note; ovMap[n.company_key]=n.ppn_override;});
   const saveNote=async(key,name,val)=>{ const {error}=await sb.from("company_notes").upsert({company_key:key,company_name:name,note:val,updated_at:new Date().toISOString()},{onConflict:"company_key"}); if(error)return err(error); reloadNotes(); };
+  const saveOverride=async(key,name,val)=>{ const {error}=await sb.from("company_notes").upsert({company_key:key,company_name:name,ppn_override:val===""?null:Number(val),updated_at:new Date().toISOString()},{onConflict:"company_key"}); if(error)return err(error); reloadNotes(); };
   const TYPES=[[1,"Einzelzimmer"],[2,"Doppelzimmer"],[3,"Mehrpersonenzimmer"]];
   const BANDS=[["lt1","Unter 1 Monat"],["1to3","1–3 Monate"],["gt3","Länger als 3 Monate"]];
   const k=(t,b)=>t+"_"+b;
@@ -1221,7 +1337,7 @@ function Pricing({bump}){
       <p className="text-xs text-slate-400 mb-3">Aus Reservierungen + Qonto. Sortiert nach Anzahl Personen (eine Firma mit vielen Leuten ist wertvoller als viele Einzelne). €/Person/Nacht = Rechnungen ÷ Personennächte.</p>
       <div className="overflow-x-auto"><table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-2">Firma</th><th className="text-right p-2">Personen</th><th className="text-left p-2 pl-3">Zimmertyp(en)</th><th className="text-right p-2">Ø Dauer (Mon.)</th><th className="text-right p-2">€/Person/Nacht</th><th className="text-left p-2 pl-3">Notiz (Team + Agenten)</th></tr></thead>
-        <tbody>{firms.map(f=>(<tr key={f.name} className="border-t border-slate-100"><td className="p-2 text-slate-700">{f.name}</td><td className="p-2 text-right font-semibold text-slate-800">{f.persons}</td><td className="p-2 pl-3 text-slate-500 text-xs">{f.tl}</td><td className="p-2 text-right text-slate-700">{f.months||"—"}</td><td className="p-2 text-right text-slate-700">{f.ppn?cur(f.ppn):"—"}</td><td className="p-2 pl-3"><input key={noteMap[norm(f.name)]||""} defaultValue={noteMap[norm(f.name)]||""} onBlur={e=>{const v=e.target.value;if(v!==(noteMap[norm(f.name)]||""))saveNote(norm(f.name),f.name,v);}} placeholder="Notiz…" className="w-48 border border-slate-200 rounded px-2 py-1 text-xs"/></td></tr>))}
+        <tbody>{firms.map(f=>(<tr key={f.name} className="border-t border-slate-100"><td className="p-2 text-slate-700">{f.name}</td><td className="p-2 text-right font-semibold text-slate-800">{f.persons}</td><td className="p-2 pl-3 text-slate-500 text-xs">{f.tl}</td><td className="p-2 text-right text-slate-700">{f.months||"—"}</td><td className="p-2 text-right"><input key={"o"+(ovMap[norm(f.name)]??"")} type="number" step="0.01" defaultValue={ovMap[norm(f.name)]??""} placeholder={f.ppn?f.ppn.toFixed(2):"€/P/N"} title={f.ppn?`berechnet: ${cur(f.ppn)} – überschreibbar`:"manueller Referenzwert"} onBlur={e=>{const v=e.target.value;const o=ovMap[norm(f.name)];if(v!==(o==null?"":String(o)))saveOverride(norm(f.name),f.name,v);}} className={"w-20 border rounded px-1 py-0.5 text-xs text-right "+(ovMap[norm(f.name)]!=null?"border-blue-300 bg-blue-50 font-semibold text-blue-700":"border-slate-200")}/></td><td className="p-2 pl-3"><textarea key={noteMap[norm(f.name)]||""} defaultValue={noteMap[norm(f.name)]||""} onBlur={e=>{const v=e.target.value;if(v!==(noteMap[norm(f.name)]||""))saveNote(norm(f.name),f.name,v);}} placeholder="Notiz für Team & Agenten…" rows={3} className="w-72 border border-slate-200 rounded px-2 py-1 text-xs align-top resize-y"/></td></tr>))}
           {!firms.length&&<tr><td colSpan="6" className="p-4 text-center text-slate-400">Keine Daten.</td></tr>}</tbody>
       </table></div>
     </Card>
@@ -1229,7 +1345,7 @@ function Pricing({bump}){
   </div>);
 }
 
-const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["anm","Anmeldungen","📋"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["price","Pricing","🏷"],["acct","Rechnungswesen","🧾"],["msg","Meldungen","📨"],["set","Einstellungen","⚙️"]];
+const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["anm","Anmeldungen","📋"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["price","Pricing","🏷"],["acct","Rechnungswesen","🧾"],["msg","Gästekommunikation","💬"],["set","Einstellungen","⚙️"]];
 function Admin({session}) {
   const [view,setView]=useState("over");
   const [bump,setBump]=useState(0);
@@ -1238,7 +1354,7 @@ function Admin({session}) {
   const logout=()=>sb.auth.signOut();
   const refresh=()=>{ setBump(b=>b+1); toast("Aktualisiert"); };
   const Body={over:<Cockpit go={go} bump={bump}/>,res:<Reservations bump={bump}/>,rooms:<Rooms bump={bump}/>,checkins:<CheckIns bump={bump}/>,
-    anm:<Anmeldungen bump={bump}/>,ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,price:<Pricing bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Meldungen bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
+    anm:<Anmeldungen bump={bump}/>,ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,price:<Pricing bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Gaestekommunikation bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
   return (
     <div className="min-h-screen">
       <header className="bg-slate-900 text-white sticky top-0 z-40">
