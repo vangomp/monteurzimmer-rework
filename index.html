@@ -839,7 +839,7 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
         const fp=`${booking.id}/p${i+1}_front_${stamp}.jpg`, bp=`${booking.id}/p${i+1}_back_${stamp}.jpg`;
         const u1=await sb.storage.from("id-cards").upload(fp,p.front,{upsert:true,contentType:p.front.type||"image/jpeg"}); if(u1.error)throw u1.error;
         const u2=await sb.storage.from("id-cards").upload(bp,p.back,{upsert:true,contentType:p.back.type||"image/jpeg"}); if(u2.error)throw u2.error;
-        const {error}=await sb.from("check_ins").insert({reservation_id:booking.id,full_name:p.name.trim(),email:(p.email||people[0].email||"").trim()||null,phone:(p.phone||people[0].phone||"").trim()||null,birth_date:p.birth_date||null,birth_place:p.birth_place||null,id_card_url:fp,id_card_back_url:bp,agreed_to_rules:agreeRules,agreed_to_checkout_video:agreeVideo,checked_in_at:new Date().toISOString()}); if(error)throw error;
+        const {error}=await sb.from("check_ins").insert({reservation_id:booking.id,full_name:p.name.trim(),email:(p.email||people[0].email||"").trim(),phone:(p.phone||people[0].phone||"").trim(),birth_date:p.birth_date||null,birth_place:p.birth_place||null,id_card_url:fp,id_card_back_url:bp,agreed_to_rules:agreeRules,agreed_to_checkout_video:agreeVideo,checked_in_at:new Date().toISOString()}); if(error)throw error;
       }
       await sb.rpc("update_reservation_checkin",{p_code:booking.code,p_language:glang,p_persons:persons,p_is_used:true});
       if(dup){ setDupWarn(true); sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:"ID-Vorprüfung",message:"Mögliche Doppel-Ausweise beim Check-in (gleiche Bildgröße) – bitte im Admin prüfen."}).then(()=>{},()=>{}); }
