@@ -137,6 +137,7 @@ const loaders = {
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
   reports: ()=> sb.from("cleaning_reports").select("*, cleaning_objekte(code,name)").order("submitted_at",{ascending:false}).limit(40).then(r=>r.data||[]),
+  reportItems: ()=> sb.from("cleaning_report_items").select("report_id,rating").then(r=>r.data||[]),
   settings: ()=> sb.from("settings").select("*").then(r=>r.data||[]),
   issues: ()=> sb.from("guest_issues").select("*").order("created_at",{ascending:false}).then(r=>r.data||[]),
   qonto: ()=> sb.from("qonto_invoices").select("*").order("issue_date",{ascending:false}).then(r=>r.data||[]),
@@ -158,8 +159,10 @@ function Cockpit({go,bump}) {
   const [issues]=useList(loaders.issues,[bump]);
   const [qi]=useList(loaders.qonto,[bump]);
   const [fups,reloadFups]=useList(loaders.followups,[bump]);
+  const [creports]=useList(loaders.reports,[bump]);
+  const [critems]=useList(loaders.reportItems,[bump]);
   const [fuText,setFuText]=useState("");
-  if(!rooms||!res||!nuki||!ext||!issues||!qi||!fups) return <Skeleton/>;
+  if(!rooms||!res||!nuki||!ext||!issues||!qi||!fups||!creports||!critems) return <Skeleton/>;
   const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0); // checked in, incl. überfällig
   const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0 && daysFromToday(r.check_out_date)<0);
   const leaving=active.filter(r=>{const d=daysFromToday(r.check_out_date);return d>=0&&d<=3;});
@@ -195,6 +198,9 @@ function Cockpit({go,bump}) {
   lowBat.forEach(n=>todo.push(["🔋",`Nuki-Akku niedrig: ${n.lock_name} (${n.battery_charge}%)`,"Reinigung",()=>go("clean"),"rose"]));
   const doorBatDue=rooms.filter(r=>{const d=r.door_battery_changed_at;return d && (Date.now()-new Date(d))/86400000>180;});
   if(doorBatDue.length) todo.push(["🔋",`${doorBatDue.length} Zimmer: Türschloss-Akku fällig (>6 Mon.)`,"Zimmer",()=>go("rooms"),"amber"]);
+  const cWorst={}; critems.forEach(it=>{cWorst[it.report_id]=Math.max(cWorst[it.report_id]||0,it.rating||0);});
+  const badClean=creports.filter(r=>!r.archived_at && !r.extra_cleaning_at && (cWorst[r.id]||0)>=3);
+  if(badClean.length) todo.push(["🧽",`${badClean.length} Reinigung(en) mit Mängeln (≥3) – Nachreinigung/Zusatzkosten`,"Reinigung",()=>go("clean"),"rose"]);
   if(!todo.length) todo.push(["✅","Nichts Dringendes – alles im grünen Bereich.","",null,"emerald"]);
   const toneCls={amber:"border-amber-300 bg-amber-50",rose:"border-rose-300 bg-rose-50",blue:"border-blue-300 bg-blue-50",emerald:"border-emerald-300 bg-emerald-50"};
   const openFups=fups.filter(f=>f.status!=="done");
@@ -555,11 +561,16 @@ function Extensions({bump}) {
 /* ============================ CLEANING ============================ */
 function Cleaning({bump}) {
   const [orders,reloadO]=useList(loaders.orders,[bump]);
-  const [reports]=useList(loaders.reports,[bump]);
+  const [reports,reloadR]=useList(loaders.reports,[bump]);
+  const [ritems]=useList(loaders.reportItems,[bump]);
   const [objekte,reloadObj]=useList(loaders.objekte,[bump]);
   const [nuki]=useList(loaders.nuki,[bump]);
   const [hEdit,setHEdit]=useState(null);
-  if(!orders||!reports||!objekte||!nuki) return <Skeleton/>;
+  if(!orders||!reports||!ritems||!objekte||!nuki) return <Skeleton/>;
+  const worstBy={}; ritems.forEach(it=>{ worstBy[it.report_id]=Math.max(worstBy[it.report_id]||0,it.rating||0); });
+  const flagBad=async(r,worst)=>{ try{ const {error}=await sb.from("cleaning_reports").update({extra_cleaning_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",r.id); if(error)throw error;
+    try{ await sbImmo.from("tasks").insert({description:`Reinigung mangelhaft (Bewertung ${worst}/5): ${r.cleaning_objekte?.code||"—"} · ${r.cleaner_name||""} (${fmt(r.submitted_at)}) → Nachreinigung + Zusatzkosten der Firma berechnen`,priority:"high",flag:"help"}); }catch(e){}
+    toast("An Slavik (IMMODAY) übergeben + als Zusatzkosten markiert"); reloadR(); }catch(e){err(e);} };
   const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
     if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
   const saveHouse=async(f)=>{ try{ const p={code:f.code,name:f.name||null,address:f.address||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,description:f.description||null,updated_at:new Date().toISOString()};
@@ -608,13 +619,18 @@ function Cleaning({bump}) {
           {!orders.length&&<div className="text-sm text-slate-400">Keine offenen Aufträge.</div>}</div>
       </Card>
       <Card className="p-5">
-        <h2 className="font-semibold text-slate-800 mb-3">📋 Reports ({reports.length}, neueste)</h2>
-        <div className="space-y-2 max-h-80 overflow-auto">{reports.map(r=>(
-          <div key={r.id} className={"flex items-center justify-between gap-2 rounded-xl px-4 py-2 border "+(r.damage_noticed?"border-rose-200 bg-rose-50":"border-slate-200")}>
+        <h2 className="font-semibold text-slate-800 mb-1">📋 Reports ({reports.length}, neueste)</h2>
+        <p className="text-xs text-slate-400 mb-3">Bewertung pro Reinigung (1 = top … 5 = schlecht). Ab <b>3</b> = Mangel → an Slavik + Zusatzkosten der Firma.</p>
+        <div className="space-y-2 max-h-80 overflow-auto">{reports.map(r=>{const worst=worstBy[r.id]||0;const bad=worst>=3;return(
+          <div key={r.id} className={"flex flex-wrap items-center justify-between gap-2 rounded-xl px-4 py-2 border "+(bad?"border-rose-300 bg-rose-50":r.damage_noticed?"border-rose-200 bg-rose-50":"border-slate-200")}>
             <div><div className="font-medium text-slate-800 text-sm">{r.cleaning_objekte?.code||"—"} <span className="text-xs text-slate-400 font-normal">· {fmt(r.submitted_at)} · {r.cleaner_name||"—"}</span></div>
               {r.damage_noticed&&<div className="text-xs text-rose-600">⚠️ Schaden: {r.damage_description||"gemeldet"}</div>}</div>
-            <Pill text={r.status} cls="bg-slate-100 text-slate-500"/>
-          </div>))}</div>
+            <div className="flex items-center gap-2">
+              {worst>0&&<Pill text={`Bewertung ${worst}/5`} cls={bad?"bg-rose-100 text-rose-700":"bg-emerald-100 text-emerald-700"}/>}
+              {bad&&(r.extra_cleaning_at?<Pill text="Zusatzkosten ✓" cls="bg-amber-100 text-amber-700"/>:<button onClick={()=>flagBad(r,worst)} className="text-xs px-2.5 py-1 rounded-lg bg-rose-600 text-white font-semibold">🚩 Slavik + Zusatzkosten</button>)}
+              <Pill text={r.status} cls="bg-slate-100 text-slate-500"/>
+            </div>
+          </div>);})}</div>
       </Card>
       <Card className="p-5">
         <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🏠 Häuser verwalten & Akkus</h2><Btn size="sm" onClick={()=>setHEdit("new")}>+ Haus</Btn></div>
