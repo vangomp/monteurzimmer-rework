@@ -1307,13 +1307,14 @@ function Gaestekommunikation({bump}){
   const msgs=mode==="firma"?cMsgs:hMsgs;
   const compName=(c)=>c.display_name||c.name||"Firma";
   const threadForCompany=(cid)=>cThreads.find(t=>String(t.company_id)===String(cid));
+  const threadForHouse=(oid)=>hThreads.find(t=>String(t.objekt_id)===String(oid));
   const msgsOfThread=(tid)=>tid?msgs.filter(m=>m.thread_id===tid):[];
   const unreadOfThread=(tid)=>msgsOfThread(tid).filter(m=>m.sender!=="team"&&!m.read_at).length;
-  const curThreadId=mode==="firma"?(threadForCompany(sel)?.id||null):sel;
+  const curThreadId=mode==="firma"?(threadForCompany(sel)?.id||null):(threadForHouse(sel)?.id||null);
   const selMsgs=msgsOfThread(curThreadId);
   const ql=q.trim().toLowerCase();
   const firmaList=companies.filter(c=>!ql||compName(c).toLowerCase().includes(ql)).map(c=>{const th=threadForCompany(c.id);return {key:String(c.id),label:compName(c),thread:th,unread:unreadOfThread(th?.id),last:th?.last_message_at||""};}).sort((a,b)=>(b.unread-a.unread)||b.last.localeCompare(a.last)||a.label.localeCompare(b.label));
-  const hausList=hThreads.filter(t=>!ql||(t.cleaning_objekte?.code||"").toLowerCase().includes(ql)).map(t=>({key:String(t.id),label:t.cleaning_objekte?.code||"Haus",thread:t,unread:unreadOfThread(t.id),last:t.last_message_at||""})).sort((a,b)=>(b.unread-a.unread)||b.last.localeCompare(a.last));
+  const hausList=(objekte||[]).filter(o=>(o.code||"").toUpperCase()!=="ANH51").filter(o=>!ql||(o.code||"").toLowerCase().includes(ql)||(o.name||"").toLowerCase().includes(ql)).map(o=>{const th=threadForHouse(o.id);return {key:String(o.id),label:o.code||o.name||"Haus",thread:th,unread:unreadOfThread(th?.id),last:th?.last_message_at||""};}).sort((a,b)=>(b.unread-a.unread)||b.last.localeCompare(a.last)||a.label.localeCompare(b.label));
   const list=mode==="firma"?firmaList:hausList;
   const selItem=list.find(i=>i.key===String(sel));
   const totalUnread=list.reduce((a,x)=>a+x.unread,0);
@@ -1322,8 +1323,9 @@ function Gaestekommunikation({bump}){
     if(mode==="firma"){ let tid=threadForCompany(sel)?.id; if(!tid){ const {data,error}=await sb.from("company_threads").insert({company_id:sel,last_message_at:new Date().toISOString()}).select("id").single(); if(error)return err(error); tid=data.id; }
       const {error}=await sb.from("messages").insert({thread_id:tid,sender:"team",body:reply.trim(),type:"chat"}); if(error)return err(error);
       await sb.from("company_threads").update({last_message_at:new Date().toISOString()}).eq("id",tid);
-    } else { const {error}=await sb.from("house_messages").insert({thread_id:sel,sender:"team",author:"Team",body:reply.trim(),type:"chat"}); if(error)return err(error);
-      await sb.from("house_threads").update({last_message_at:new Date().toISOString()}).eq("id",sel); }
+    } else { let tid=threadForHouse(sel)?.id; if(!tid){ const {data,error}=await sb.from("house_threads").insert({objekt_id:sel,last_message_at:new Date().toISOString()}).select("id").single(); if(error)return err(error); tid=data.id; }
+      const {error}=await sb.from("house_messages").insert({thread_id:tid,sender:"team",author:"Team",body:reply.trim(),type:"chat"}); if(error)return err(error);
+      await sb.from("house_threads").update({last_message_at:new Date().toISOString()}).eq("id",tid); }
     setReply(""); reloadAll(); };
   const sendBroadcast=async()=>{ if(!bcBody.trim()||!bcHouses.length)return toast("Text + mind. ein Haus wählen","err");
     const {error}=await sb.from("broadcasts").insert({body:bcBody.trim(),target_houses:bcHouses,created_by:"Jarne"}); if(error)return err(error);
