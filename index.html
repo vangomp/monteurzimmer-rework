@@ -50,12 +50,12 @@ const stayBadge = (s) => ({ active:["Läuft","bg-emerald-100 text-emerald-700"],
 const Card = ({children, className=""}) => <div className={"bg-white rounded-2xl shadow-sm border border-slate-200 "+className}>{children}</div>;
 const Pill = ({text, cls}) => <span className={"px-2.5 py-0.5 rounded-full text-xs font-semibold "+cls}>{text}</span>;
 const Battery = ({v}) => { const c=v<25?"text-rose-600":v<50?"text-amber-600":"text-emerald-600"; return <span className={"font-bold "+c}>{v}%</span>; };
-const Btn = ({children,onClick,kind="primary",size="md",type="button"}) => {
+const Btn = ({children,onClick,kind="primary",size="md",type="button",disabled=false,className=""}) => {
   const k={primary:"bg-blue-600 text-white hover:bg-blue-700",ok:"bg-emerald-600 text-white hover:bg-emerald-700",
     danger:"bg-rose-600 text-white hover:bg-rose-700",ghost:"bg-slate-100 text-slate-600 hover:bg-slate-200",
     soft:"bg-slate-200 text-slate-700 hover:bg-slate-300"}[kind];
   const s={sm:"px-2.5 py-1 text-xs",md:"px-3 py-1.5 text-sm",lg:"px-4 py-2 text-sm"}[size];
-  return <button type={type} onClick={onClick} className={"rounded-lg font-semibold transition-colors "+k+" "+s}>{children}</button>;
+  return <button type={type} disabled={disabled} onClick={onClick} className={"rounded-lg font-semibold transition-colors "+k+" "+s+(disabled?" opacity-40 cursor-not-allowed":"")+(className?" "+className:"")}>{children}</button>;
 };
 const IconBtn = ({title,onClick,children,color="text-slate-500"}) =>
   <button onClick={onClick} title={title} className={"px-1.5 py-1 rounded hover:bg-slate-100 "+color}>{children}</button>;
@@ -148,6 +148,7 @@ const loaders = {
   companyMsgs: ()=> sb.from("messages").select("*").order("created_at").then(r=>r.data||[]),
   houseThreads: ()=> sb.from("house_threads").select("*, cleaning_objekte(code,name)").order("last_message_at",{ascending:false,nullsFirst:false}).then(r=>r.data||[]),
   houseMsgs: ()=> sb.from("house_messages").select("*").order("created_at").then(r=>r.data||[]),
+  companies: ()=> sb.from("companies").select("id,name,display_name").order("name").then(r=>r.data||[]),
 };
 
 /* ============================ COCKPIT ============================ */
@@ -807,9 +808,136 @@ function WgbSettingsEditor(){
   </Card>);
 }
 
+/* ============================ CHECK-IN WIZARD (Gast) ============================ */
+function IdShot({label,file,onFile}){
+  return (<label className={"flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed p-3 cursor-pointer text-center "+(file?"border-emerald-400 bg-emerald-50":"border-slate-300 bg-slate-50")}>
+    <span className="text-2xl">{file?"✓":"📷"}</span>
+    <span className={"text-xs font-semibold "+(file?"text-emerald-700":"text-slate-500")}>{file?label+" ✓":label}</span>
+    {file&&<span className="text-[10px] text-slate-400 truncate max-w-[120px]">{file.name||"Foto"}</span>}
+    <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>{const f=e.target.files&&e.target.files[0]; if(f) onFile(f);}}/>
+  </label>);
+}
+function CheckinWizard({booking,room,lang,onDone,onReset}){
+  const cap=Math.max(1, room.capacity||booking.persons||1);
+  const [step,setStep]=useState(0);
+  const [glang,setGlang]=useState(lang||booking.preferred_language||"de");
+  const [persons,setPersons]=useState(Math.min(booking.persons||1,cap));
+  const blank=()=>({name:"",email:"",phone:"",birth_date:"",birth_place:"",front:null,back:null});
+  const [people,setPeople]=useState([blank()]);
+  const [hr,setHr]=useState([]);
+  const [agreeRules,setAgreeRules]=useState(false),[agreeVideo,setAgreeVideo]=useState(false);
+  const [busy,setBusy]=useState(false),[dupWarn,setDupWarn]=useState(false);
+  useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
+  useEffect(()=>{ setPeople(p=>{ const n=[...p]; while(n.length<persons)n.push(blank()); return n.slice(0,persons); }); },[persons]);
+  const upP=(i,k,v)=>setPeople(ps=>ps.map((p,j)=>j===i?{...p,[k]:v}:p));
+  const idsComplete=people.length===persons && people.every(p=>p.front&&p.back);
+  const STEPS=["Sprache","Personen & Daten","Ausweise","Hausordnung","Cashback","Fertig"];
+  const canNext=()=>{ if(step===0)return true; if(step===1)return persons>=1&&persons<=cap&&people.every(p=>p.name.trim())&&people[0].email.trim(); if(step===2)return idsComplete; if(step===3)return agreeRules; if(step===4)return agreeVideo; return true; };
+  const submit=async()=>{ setBusy(true);
+    try{ const sizes=people.map(p=>p.front&&p.front.size).filter(Boolean); const dup=sizes.length!==new Set(sizes).size; const stamp=Date.now();
+      for(let i=0;i<people.length;i++){ const p=people[i];
+        const fp=`${booking.id}/p${i+1}_front_${stamp}.jpg`, bp=`${booking.id}/p${i+1}_back_${stamp}.jpg`;
+        const u1=await sb.storage.from("id-cards").upload(fp,p.front,{upsert:true,contentType:p.front.type||"image/jpeg"}); if(u1.error)throw u1.error;
+        const u2=await sb.storage.from("id-cards").upload(bp,p.back,{upsert:true,contentType:p.back.type||"image/jpeg"}); if(u2.error)throw u2.error;
+        const {error}=await sb.from("check_ins").insert({reservation_id:booking.id,full_name:p.name.trim(),email:(p.email||people[0].email||"").trim()||null,phone:(p.phone||people[0].phone||"").trim()||null,birth_date:p.birth_date||null,birth_place:p.birth_place||null,id_card_url:fp,id_card_back_url:bp,agreed_to_rules:agreeRules,agreed_to_checkout_video:agreeVideo,checked_in_at:new Date().toISOString()}); if(error)throw error;
+      }
+      await sb.rpc("update_reservation_checkin",{p_code:booking.code,p_language:glang,p_persons:persons,p_is_used:true});
+      if(dup){ setDupWarn(true); sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:"ID-Vorprüfung",message:"Mögliche Doppel-Ausweise beim Check-in (gleiche Bildgröße) – bitte im Admin prüfen."}).then(()=>{},()=>{}); }
+      setStep(5);
+    }catch(e){ err(e); }
+    setBusy(false);
+  };
+  const LANGS=[["de","Deutsch"],["en","English"],["cs","Čeština"],["sk","Slovenčina"],["ru","Русский"]];
+  const addr=room.cleaning_objekte?.address||""; const houseName=room.cleaning_objekte?.name||"";
+  const Shell=React.useRef(({children,footer,step})=>(<div className="min-h-screen p-4"><div className="max-w-md mx-auto py-4">
+    <div className="bg-slate-900 rounded-t-3xl p-5 text-center">
+      <div className="w-12 h-12 rounded-2xl bg-blue-600 mx-auto flex items-center justify-center text-2xl">🏠</div>
+      <h2 className="text-white font-bold text-lg mt-2">Check-In · {roomShort(room.room_number)}</h2>
+      <p className="text-slate-400 text-xs">{booking.guest_name||"Gast"} · {fmt(booking.check_in_date)}–{fmt(booking.check_out_date)}</p>
+      {step<5&&<div className="flex gap-1 mt-3 justify-center">{STEPS.slice(0,5).map((s,i)=><div key={i} className={"h-1.5 rounded-full transition-all "+(i<=step?"bg-blue-500 w-7":"bg-slate-700 w-4")}/>)}</div>}
+      {step<5&&<p className="text-slate-300 text-xs mt-2 font-semibold">{step+1}/5 · {STEPS[step]}</p>}
+    </div>
+    <div className="bg-white rounded-b-3xl p-5 shadow-lg space-y-4">{children}
+      {footer!==null&&<div className="flex gap-2 pt-1">{step>0&&step<5&&<Btn kind="soft" onClick={()=>setStep(s=>s-1)}>← Zurück</Btn>}{footer}</div>}
+    </div>
+    {step<5&&<button onClick={onReset} className="text-xs text-slate-400 w-full text-center mt-3">← anderer Code</button>}
+  </div></div>)).current;
+
+  if(step===0) return <Shell step={step} footer={<Btn className="flex-1" size="lg" onClick={()=>setStep(1)}>Weiter →</Btn>}>
+    <p className="text-sm text-slate-600">Sprache wählen · Choose language</p>
+    <div className="grid grid-cols-1 gap-2">{LANGS.map(([k,l])=>(
+      <button key={k} onClick={()=>setGlang(k)} className={"rounded-xl py-3 text-sm font-semibold border-2 "+(glang===k?"border-blue-600 bg-blue-50 text-blue-700":"border-slate-200 text-slate-600")}>{l}</button>))}</div>
+  </Shell>;
+
+  if(step===1) return <Shell step={step} footer={<Btn className="flex-1" size="lg" disabled={!canNext()} onClick={()=>canNext()&&setStep(2)}>Weiter →</Btn>}>
+    <div><div className="text-sm font-semibold text-slate-700 mb-1">Wie viele Personen schlafen im Zimmer?</div>
+      <div className="text-xs text-slate-400 mb-2">Max. {cap} (Kapazität dieses Zimmers). Für jede Person wird ein Ausweis benötigt.</div>
+      <div className="flex flex-wrap gap-2">{Array.from({length:cap},(_,i)=>i+1).map(n=>(
+        <button key={n} onClick={()=>setPersons(n)} className={"w-11 h-11 rounded-xl font-bold border-2 "+(persons===n?"border-blue-600 bg-blue-600 text-white":"border-slate-200 text-slate-600")}>{n}</button>))}</div></div>
+    {people.map((p,i)=>(<div key={i} className="rounded-xl border border-slate-200 p-3 space-y-2">
+      <div className="text-xs font-bold text-slate-500 uppercase">Person {i+1}{i===0?" (Hauptkontakt)":""}</div>
+      <input className={inputCls} placeholder="Vollständiger Name (wie im Ausweis)" value={p.name} onChange={e=>upP(i,"name",e.target.value)}/>
+      {i===0&&<><input className={inputCls} placeholder="E-Mail" value={p.email} onChange={e=>upP(i,"email",e.target.value)}/>
+        <input className={inputCls} placeholder="Telefon" value={p.phone} onChange={e=>upP(i,"phone",e.target.value)}/></>}
+      <div className="grid grid-cols-2 gap-2">
+        <input className={inputCls} type="date" value={p.birth_date} onChange={e=>upP(i,"birth_date",e.target.value)} title="Geburtsdatum"/>
+        <input className={inputCls} placeholder="Geburtsort" value={p.birth_place} onChange={e=>upP(i,"birth_place",e.target.value)}/>
+      </div></div>))}
+  </Shell>;
+
+  if(step===2) return <Shell step={step} footer={<Btn className="flex-1" size="lg" disabled={!idsComplete} onClick={()=>idsComplete&&setStep(3)}>Weiter →</Btn>}>
+    <p className="text-sm text-slate-600">Bitte je Person <b>Vorder- und Rückseite</b> des Ausweises fotografieren. Pflicht für alle {persons} Person(en).</p>
+    {people.map((p,i)=>(<div key={i} className="rounded-xl border border-slate-200 p-3">
+      <div className="text-xs font-bold text-slate-500 uppercase mb-2">{p.name||("Person "+(i+1))}</div>
+      <div className="grid grid-cols-2 gap-2">
+        <IdShot label="Vorderseite" file={p.front} onFile={f=>upP(i,"front",f)}/>
+        <IdShot label="Rückseite" file={p.back} onFile={f=>upP(i,"back",f)}/>
+      </div></div>))}
+    <div className={"rounded-xl p-2 text-xs text-center font-semibold "+(idsComplete?"bg-emerald-50 text-emerald-700":"bg-amber-50 text-amber-700")}>{idsComplete?"Alle Ausweise vollständig ✓":`${people.filter(p=>p.front&&p.back).length}/${persons} Ausweise vollständig`}</div>
+  </Shell>;
+
+  if(step===3) return <Shell step={step} footer={<Btn className="flex-1" size="lg" disabled={!agreeRules} onClick={()=>agreeRules&&setStep(4)}>Akzeptieren & Weiter →</Btn>}>
+    <div className="rounded-xl bg-rose-50 border-2 border-rose-300 p-3 text-center"><div className="text-2xl">🚭</div><div className="font-bold text-rose-700">Rauchen strengstens verboten</div><div className="text-xs text-rose-600">Im gesamten Haus & in allen Zimmern.</div></div>
+    <div className="flex items-center justify-between"><h3 className="font-semibold text-slate-800">📋 Hausordnung</h3>
+      <div className="flex gap-1">{["de","en","cs","sk","ru"].map(l=><button key={l} onClick={()=>setGlang(l)} className={"text-xs px-2 py-1 rounded font-semibold "+(glang===l?"bg-blue-600 text-white":"bg-slate-100 text-slate-500")}>{l.toUpperCase()}</button>)}</div></div>
+    <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600 max-h-56 overflow-y-auto">{hr.length?hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>):<li className="list-none text-slate-400">Keine Hausregeln hinterlegt.</li>}</ol>
+    <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={agreeRules} onChange={e=>setAgreeRules(e.target.checked)} className="w-4 h-4"/> Ich habe die Hausordnung gelesen und stimme zu.</label>
+  </Shell>;
+
+  if(step===4) return <Shell step={step} footer={<Btn kind="ok" className="flex-1" size="lg" disabled={!agreeVideo||busy} onClick={()=>{if(agreeVideo&&!busy)submit();}}>{busy?"Speichere…":"✓ Check-in abschließen"}</Btn>}>
+    <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-2xl p-4">
+      <div className="text-sm opacity-90">💶 Cashback</div>
+      <div className="text-lg font-bold mt-1">20 € zurück fürs Auszugs-Video</div>
+      <div className="text-xs opacity-90 mt-2">Film am Check-out-Tag dein Zimmer. Sichtbar sein muss: Zimmer & Bett, Boden, Bad, leerer Kühlschrank, kein Müll, Fenster zu. Bei sauberem Zustand bekommst du 20 € zurück.</div>
+    </div>
+    <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={agreeVideo} onChange={e=>setAgreeVideo(e.target.checked)} className="w-4 h-4"/> Ich nehme beim Auszug ein kurzes Video auf.</label>
+  </Shell>;
+
+  // step 5 – success
+  return <Shell step={step} footer={null}>
+    <div className="text-center"><div className="text-4xl">✅</div><h3 className="font-bold text-slate-800 text-lg mt-1">Check-In erfolgreich!</h3><p className="text-xs text-slate-400">Eine Bestätigung geht an deine E-Mail.</p></div>
+    {dupWarn&&<div className="bg-amber-50 border border-amber-200 rounded-xl p-2 text-xs text-amber-700 text-center">Hinweis: Wir prüfen deine Ausweise noch kurz manuell.</div>}
+    <div className="grid grid-cols-2 gap-3 text-sm">
+      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Haustür-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
+      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Zimmer-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
+      <div className="bg-slate-50 rounded-xl p-3 col-span-2"><div className="text-xs text-slate-400">Adresse</div><div className="font-semibold text-slate-800">{houseName}{addr?(houseName?" · ":"")+addr:""||"—"}</div></div>
+      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
+      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">{room.wifi_password||"—"}</div></div>
+    </div>
+    {room.intro_video_url&&<a href={room.intro_video_url} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">▶ Wie komme ich in mein Zimmer?</a>}
+    <div className="rounded-xl border border-slate-200 p-3 text-center">
+      <div className="text-sm font-semibold text-slate-700 mb-1">📲 Unsere Plattform statt WhatsApp</div>
+      <p className="text-xs text-slate-400 mb-2">Scannen oder „Zum Home-Bildschirm hinzufügen" – hier meldest du Probleme & bekommst Infos.</p>
+      <img alt="QR" className="mx-auto rounded-lg border border-slate-200" width="150" height="150" src={"https://api.qrserver.com/v1/create-qr-code/?size=170x170&data="+encodeURIComponent(typeof window!=="undefined"?window.location.href:"")}/>
+    </div>
+    <Btn className="w-full" size="lg" onClick={onDone}>Zur Gäste-App →</Btn>
+  </Shell>;
+}
+
 /* ============================ GUEST PORTAL ============================ */
 function Guest({onAdmin}) {
   const [code,setCode]=useState(""),[booking,setBooking]=useState(null),[busy,setBusy]=useState(false);
+  const [checkedIn,setCheckedIn]=useState(undefined);
   const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
   const [phase,setPhase]=useState("idle"),[detected,setDetected]=useState({});
   const [hr,setHr]=useState([]); const [glang,setGlang]=useState("de");
@@ -821,8 +949,10 @@ function Guest({onAdmin}) {
   const reqVerlaengern=()=>{ const d=prompt("Bis wann möchtest du verlängern? (TT.MM.JJJJ)"); if(d) reqG("extension","Verlängerung beantragt bis "+d); };
   useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
   const lookup=async()=>{ if(!code.trim())return; setBusy(true);
-    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link,photos,intro_video_url)").eq("code",code.trim().toUpperCase()).maybeSingle();
-    setBusy(false); if(error||!data){ toast("Code nicht gefunden","err"); return; } setBooking(data); setGlang(data.preferred_language||"de"); };
+    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link,photos,intro_video_url,capacity,cleaning_objekte(name,address))").eq("code",code.trim().toUpperCase()).maybeSingle();
+    if(error||!data){ setBusy(false); toast("Code nicht gefunden","err"); return; }
+    const {count}=await sb.from("check_ins").select("id",{count:"exact",head:true}).eq("reservation_id",data.id);
+    setBusy(false); setBooking(data); setGlang(data.preferred_language||"de"); setCheckedIn((count||0)>0); };
   const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
     if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
   const missing=ELEMENTS.filter(e=>detected[e]===false);
@@ -840,6 +970,8 @@ function Guest({onAdmin}) {
     </div>
   );
   const room=booking.rooms||{};
+  if(checkedIn===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Lädt…</div>;
+  if(checkedIn===false) return <CheckinWizard booking={booking} room={room} lang={glang} onReset={()=>{setBooking(null);setCode("");setCheckedIn(undefined);}} onDone={()=>setCheckedIn(true)}/>;
   const sendIssue=async()=>{ if(!issue.message.trim())return toast("Bitte Problem beschreiben","err");
     const {error}=await sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:issue.category||null,message:issue.message});
     if(error)return err(error); setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet"); };
@@ -1159,64 +1291,71 @@ function Accounting({bump}) {
 /* ============================ GÄSTEKOMMUNIKATION ============================ */
 function Gaestekommunikation({bump}){
   const [mode,setMode]=useState("firma");
-  const [sel,setSel]=useState(null);
+  const [sel,setSel]=useState(null); // firma: company_id ; haus: thread_id
+  const [q,setQ]=useState("");
   const [reply,setReply]=useState("");
   const [bcOpen,setBcOpen]=useState(false);
   const [bcBody,setBcBody]=useState(""); const [bcHouses,setBcHouses]=useState([]);
+  const [companies]=useList(loaders.companies,[bump]);
   const [cThreads,reloadCT]=useList(loaders.companyThreads,[bump]);
   const [cMsgs,reloadCM]=useList(loaders.companyMsgs,[bump]);
   const [hThreads,reloadHT]=useList(loaders.houseThreads,[bump]);
   const [hMsgs,reloadHM]=useList(loaders.houseMsgs,[bump]);
   const [objekte]=useList(loaders.objekte,[bump]);
-  if(!cThreads||!cMsgs||!hThreads||!hMsgs) return <Skeleton/>;
-  const threads=mode==="firma"?cThreads:hThreads;
+  if(!companies||!cThreads||!cMsgs||!hThreads||!hMsgs) return <Skeleton/>;
+  const reloadAll=()=>{reloadCM();reloadCT();reloadHM();reloadHT();};
   const msgs=mode==="firma"?cMsgs:hMsgs;
-  const nameOf=(t)=> mode==="firma"?(t.companies?.display_name||t.companies?.name||"Firma"):(t.cleaning_objekte?.code||"Haus");
-  const msgsOf=(tid)=> msgs.filter(m=>m.thread_id===tid);
-  const lastOf=(t)=>{ const l=msgsOf(t.id); return l[l.length-1]; };
-  const unreadOf=(t)=> msgsOf(t.id).filter(m=>m.sender!=="team"&&!m.read_at).length;
-  const selMsgs=sel?msgsOf(sel):[];
-  const reloadMsgs=()=>{ if(mode==="firma"){reloadCM();reloadCT();}else{reloadHM();reloadHT();} };
-  const send=async()=>{ if(!sel||!reply.trim())return; const tbl=mode==="firma"?"messages":"house_messages"; const tt=mode==="firma"?"company_threads":"house_threads";
-    const payload={thread_id:sel,sender:"team",body:reply.trim(),type:"chat"}; if(mode==="haus")payload.author="Team";
-    const {error}=await sb.from(tbl).insert(payload); if(error)return err(error);
-    await sb.from(tt).update({last_message_at:new Date().toISOString()}).eq("id",sel);
-    setReply(""); reloadMsgs(); };
-  const openThread=async(t)=>{ setSel(t.id); const tbl=mode==="firma"?"messages":"house_messages";
-    const ids=msgsOf(t.id).filter(m=>m.sender!=="team"&&!m.read_at).map(m=>m.id);
-    if(ids.length){ await sb.from(tbl).update({read_at:new Date().toISOString()}).in("id",ids); reloadMsgs(); } };
+  const compName=(c)=>c.display_name||c.name||"Firma";
+  const threadForCompany=(cid)=>cThreads.find(t=>String(t.company_id)===String(cid));
+  const msgsOfThread=(tid)=>tid?msgs.filter(m=>m.thread_id===tid):[];
+  const unreadOfThread=(tid)=>msgsOfThread(tid).filter(m=>m.sender!=="team"&&!m.read_at).length;
+  const curThreadId=mode==="firma"?(threadForCompany(sel)?.id||null):sel;
+  const selMsgs=msgsOfThread(curThreadId);
+  const ql=q.trim().toLowerCase();
+  const firmaList=companies.filter(c=>!ql||compName(c).toLowerCase().includes(ql)).map(c=>{const th=threadForCompany(c.id);return {key:String(c.id),label:compName(c),thread:th,unread:unreadOfThread(th?.id),last:th?.last_message_at||""};}).sort((a,b)=>(b.unread-a.unread)||b.last.localeCompare(a.last)||a.label.localeCompare(b.label));
+  const hausList=hThreads.filter(t=>!ql||(t.cleaning_objekte?.code||"").toLowerCase().includes(ql)).map(t=>({key:String(t.id),label:t.cleaning_objekte?.code||"Haus",thread:t,unread:unreadOfThread(t.id),last:t.last_message_at||""})).sort((a,b)=>(b.unread-a.unread)||b.last.localeCompare(a.last));
+  const list=mode==="firma"?firmaList:hausList;
+  const selItem=list.find(i=>i.key===String(sel));
+  const totalUnread=list.reduce((a,x)=>a+x.unread,0);
+  const openItem=async(item)=>{ setSel(item.key); const tid=item.thread?.id; if(tid){ const tbl=mode==="firma"?"messages":"house_messages"; const ids=msgs.filter(m=>m.thread_id===tid&&m.sender!=="team"&&!m.read_at).map(m=>m.id); if(ids.length){ await sb.from(tbl).update({read_at:new Date().toISOString()}).in("id",ids); reloadAll(); } } };
+  const send=async()=>{ if(!sel||!reply.trim())return;
+    if(mode==="firma"){ let tid=threadForCompany(sel)?.id; if(!tid){ const {data,error}=await sb.from("company_threads").insert({company_id:sel,last_message_at:new Date().toISOString()}).select("id").single(); if(error)return err(error); tid=data.id; }
+      const {error}=await sb.from("messages").insert({thread_id:tid,sender:"team",body:reply.trim(),type:"chat"}); if(error)return err(error);
+      await sb.from("company_threads").update({last_message_at:new Date().toISOString()}).eq("id",tid);
+    } else { const {error}=await sb.from("house_messages").insert({thread_id:sel,sender:"team",author:"Team",body:reply.trim(),type:"chat"}); if(error)return err(error);
+      await sb.from("house_threads").update({last_message_at:new Date().toISOString()}).eq("id",sel); }
+    setReply(""); reloadAll(); };
   const sendBroadcast=async()=>{ if(!bcBody.trim()||!bcHouses.length)return toast("Text + mind. ein Haus wählen","err");
     const {error}=await sb.from("broadcasts").insert({body:bcBody.trim(),target_houses:bcHouses,created_by:"Jarne"}); if(error)return err(error);
     toast("Aushang gesendet an "+bcHouses.length+" Haus/Häuser"); setBcOpen(false); setBcBody(""); setBcHouses([]); };
-  const totalUnread=threads.reduce((a,t)=>a+unreadOf(t),0);
   return (<div className="space-y-4">
-    <PageHead title="Gästekommunikation" sub={`Chat mit Firmen & Häusern · ${totalUnread} ungelesen`} right={<Btn size="sm" onClick={()=>setBcOpen(true)}>📢 Aushang senden</Btn>}/>
-    <div className="flex gap-1">{[["firma","Nach Firma"],["haus","Nach Haus"]].map(([k,l])=>(
-      <button key={k} onClick={()=>{setMode(k);setSel(null);}} className={"px-3 py-1.5 rounded-lg text-sm font-semibold "+(mode===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>))}</div>
+    <PageHead title="Gästekommunikation" sub={`Chat pro Firma/Kunde oder pro Haus · ${totalUnread} ungelesen`} right={<Btn size="sm" onClick={()=>setBcOpen(true)}>📢 Aushang senden</Btn>}/>
+    <div className="flex gap-1">{[["firma","Nach Firma/Kunde"],["haus","Nach Haus"]].map(([k,l])=>(
+      <button key={k} onClick={()=>{setMode(k);setSel(null);setQ("");}} className={"px-3 py-1.5 rounded-lg text-sm font-semibold "+(mode===k?"bg-blue-600 text-white":"bg-slate-100 text-slate-600")}>{l}</button>))}</div>
     <div className="grid md:grid-cols-3 gap-4">
       <Card className="p-0 overflow-hidden md:col-span-1">
-        <div className="bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500 uppercase">{mode==="firma"?"Firmen":"Häuser"} ({threads.length})</div>
-        <div className="divide-y divide-slate-100 max-h-[60vh] overflow-y-auto">{threads.map(t=>{const u=unreadOf(t);const lm=lastOf(t);const on=sel===t.id;return(
-          <button key={t.id} onClick={()=>openThread(t)} className={"w-full text-left px-3 py-2.5 hover:bg-slate-50 "+(on?"bg-blue-50":"")}>
-            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-slate-800 text-sm truncate">{nameOf(t)}</span>{u>0&&<span className="shrink-0"><Pill text={`● persönlich ${u}`} cls="bg-amber-100 text-amber-700"/></span>}</div>
-            <div className="text-xs text-slate-400 truncate">{lm?(lm.sender==="team"?"Du: ":"")+(lm.body||"[Anhang]"):"—"}</div>
+        <div className="p-2 border-b border-slate-100"><input value={q} onChange={e=>setQ(e.target.value)} placeholder={mode==="firma"?"🔍 Firma/Kunde suchen…":"🔍 Haus suchen…"} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm"/></div>
+        <div className="divide-y divide-slate-100 max-h-[58vh] overflow-y-auto">{list.map(it=>{const on=String(sel)===it.key;const lm=it.thread?msgsOfThread(it.thread.id).slice(-1)[0]:null;return(
+          <button key={it.key} onClick={()=>openItem(it)} className={"w-full text-left px-3 py-2.5 hover:bg-slate-50 "+(on?"bg-blue-50":"")}>
+            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-slate-800 text-sm truncate">{it.label}</span>{it.unread>0&&<span className="shrink-0"><Pill text={`● persönlich ${it.unread}`} cls="bg-amber-100 text-amber-700"/></span>}</div>
+            <div className="text-xs text-slate-400 truncate">{lm?(lm.sender==="team"?"Du: ":"")+(lm.body||"[Anhang]"):(it.thread?"—":"noch kein Chat – jetzt anschreiben")}</div>
           </button>);})}
-          {!threads.length&&<div className="p-4 text-sm text-slate-400">Noch keine {mode==="firma"?"Firmen-":"Haus-"}Konversationen.</div>}
+          {!list.length&&<div className="p-4 text-sm text-slate-400">Keine {mode==="firma"?"Firmen":"Häuser"} gefunden.</div>}
         </div>
       </Card>
       <Card className="p-0 md:col-span-2 flex flex-col min-h-[60vh]">
-        {!sel?<div className="flex-1 flex items-center justify-center text-slate-400 text-sm p-6">Konversation links wählen.</div>:<React.Fragment>
-          <div className="bg-slate-50 px-4 py-2 font-semibold text-slate-800 border-b border-slate-100">{nameOf(threads.find(t=>t.id===sel)||{})}</div>
+        {!sel?<div className="flex-1 flex items-center justify-center text-slate-400 text-sm p-6">{mode==="firma"?"Firma/Kunde links wählen, um zu chatten.":"Haus links wählen."}</div>:<React.Fragment>
+          <div className="bg-slate-50 px-4 py-2 font-semibold text-slate-800 border-b border-slate-100">{selItem?selItem.label:""}</div>
           <div className="flex-1 overflow-y-auto p-4 space-y-2">{selMsgs.map(m=>(
             <div key={m.id} className={"max-w-[80%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"ml-auto bg-blue-600 text-white":"bg-slate-100 text-slate-800")}>
-              {m.type&&m.type!=="chat"&&<div className={"text-[10px] font-semibold mb-0.5 "+(m.sender==="team"?"text-blue-100":"text-slate-500")}>{({problem:"🛠 Problem",extension:"📅 Verlängerung",checkout_video:"🎥 Check-out-Video",wgb_request:"📋 WGB-Antrag",info:"📢 Info"})[m.type]||m.type}</div>}
+              {m.type&&m.type!=="chat"&&<div className={"text-[10px] font-semibold mb-0.5 "+(m.sender==="team"?"text-blue-100":"text-slate-500")}>{({problem:"🛠 Problem",extension:"📅 Verlängerung",checkout:"🧳 Auscheck-Antrag",checkout_video:"🎥 Check-out-Video",wgb_request:"📋 WGB-Antrag",info:"📢 Info"})[m.type]||m.type}</div>}
               <div>{m.body}</div>{m.attachment_path&&<div className="text-[11px] mt-1 opacity-80">📎 Anhang</div>}
               <div className={"text-[10px] mt-1 "+(m.sender==="team"?"text-blue-100":"text-slate-400")}>{m.author?m.author+" · ":""}{fmt(m.created_at)}</div>
             </div>))}
-            {!selMsgs.length&&<div className="text-sm text-slate-400 text-center mt-6">Noch keine Nachrichten.</div>}
+            {!selMsgs.length&&<div className="text-sm text-slate-400 text-center mt-6">Noch keine Nachrichten – schreib der Firma die erste Nachricht.</div>}
           </div>
           <div className="border-t border-slate-100 p-3 flex gap-2">
-            <input value={reply} onChange={e=>setReply(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Antwort an Gast…" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm"/>
+            <input value={reply} onChange={e=>setReply(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Nachricht an die Firma…" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm"/>
             <Btn kind="ok" onClick={send}>Senden</Btn>
           </div>
         </React.Fragment>}
