@@ -93,6 +93,15 @@ function Toasts(){
 }
 const toast=(t,k)=>toastFn(t,k);
 const err=(e)=>{ console.error(e); toast((e&&e.message)||"Fehler","err"); };
+const BUCHUNG_EMAIL="buchung@jjrealestate.de";
+// Ruft die bestehende send-email Edge-Function auf (Gmail-SMTP). subject wird serverseitig pro Template/Sprache überschrieben.
+async function sendMail(template,to,language,data){
+  if(!to) return {skipped:"no recipient"};
+  try{ const {data:res,error}=await sb.functions.invoke("send-email",{body:{to,subject:"JJ Real Estate",template,language:language||"de",data:data||{}}});
+    if(error){ console.warn("sendMail",template,error); return {error}; }
+    return {ok:true,res};
+  }catch(e){ console.warn("sendMail",template,e); return {error:e}; }
+}
 
 /* ============================ LOGIN ============================ */
 function Login({onGuest}) {
@@ -287,7 +296,9 @@ function Reservations({bump}) {
     const payload={ guest_name:form.guest_name, guest_email:form.guest_email||null, room_id:form.room_id||null,
       check_in_date:form.check_in_date, check_out_date:form.check_out_date, contact_channel:form.contact_channel||null, preferred_language:form.preferred_language||"de",
       persons:form.persons?Number(form.persons):null, status:form.status||"confirmed" };
-    if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt"); }
+    if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt");
+      if(payload.guest_email){ const rn=(roomOpts||[]).find(rr=>rr.id===payload.room_id)?.room_number||""; const link=window.location.origin+"/?code="+payload.code;
+        sendMail("reservation_confirmation",payload.guest_email,payload.preferred_language||"de",{guestName:payload.guest_name||"Gast",roomNumber:rn,reservationCode:payload.code,checkInDate:payload.check_in_date||"",checkOutDate:payload.check_out_date||"",checkinLink:link}); } }
     else { const {error}=await sb.from("reservations").update(payload).eq("id",edit.id); if(error) throw error; toast("Gespeichert"); }
     setEdit(null); reload(); }catch(e){ err(e); } };
   const del=async(r)=>{ if(!confirm(`Reservierung ${r.code} (${r.guest_name||"—"}) löschen?\n\nTipp: Zum „Beenden" lieber archivieren. Löschen nur bei Fehlanlage. (1/2)`))return;
@@ -542,7 +553,10 @@ function Extensions({bump}) {
   if(!rows) return <Skeleton/>;
   const decide=async(e,ok)=>{ try{
     const {error}=await sb.from("extension_requests").update({status:ok?"approved":"rejected"}).eq("id",e.id); if(error)throw error;
-    if(ok){ const resv=e.check_ins?.reservations; if(resv?.code && e.requested_checkout_date){ await sb.from("reservations").update({check_out_date:e.requested_checkout_date}).eq("code",resv.code); } }
+    const resv=e.check_ins?.reservations; const origCheckout=resv?.check_out_date||"";
+    if(ok){ if(resv?.code && e.requested_checkout_date){ await sb.from("reservations").update({check_out_date:e.requested_checkout_date}).eq("code",resv.code); } }
+    if(resv?.code){ const {data:rd}=await sb.from("reservations").select("guest_email,guest_name,preferred_language").eq("code",resv.code).maybeSingle();
+      if(rd?.guest_email) sendMail("extension_response",rd.guest_email,rd.preferred_language||"de",{guestName:rd.guest_name||e.check_ins?.full_name||"Gast",roomNumber:resv.rooms?.room_number||"",newCheckoutDate:ok?(e.requested_checkout_date||""):"",originalCheckoutDate:origCheckout,status:ok?"approved":"rejected",adminNotes:""}); }
     toast(ok?"Freigegeben – Auszug verschoben":"Abgelehnt"); reload(); }catch(er){err(er);} };
   return (
     <div className="space-y-4">
@@ -844,6 +858,8 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
       }
       await sb.rpc("update_reservation_checkin",{p_code:booking.code,p_language:glang,p_persons:persons,p_is_used:true});
       if(dup){ setDupWarn(true); sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:"ID-Vorprüfung",message:"Mögliche Doppel-Ausweise beim Check-in (gleiche Bildgröße) – bitte im Admin prüfen."}).then(()=>{},()=>{}); }
+      const link=(typeof window!=="undefined"?window.location.origin:"")+"/?code="+booking.code;
+      sendMail("checkin_confirmation",(people[0].email||"").trim(),glang,{guestName:people[0].name||booking.guest_name||"Gast",roomNumber:room.room_number||"",doorCode:room.door_code||"",houseDoorCode:room.house_door_code||"",reservationCode:booking.code,checkInDate:booking.check_in_date||"",checkOutDate:booking.check_out_date||"",houseAddress:[room.cleaning_objekte?.name,room.cleaning_objekte?.address].filter(Boolean).join(" · "),wifiSsid:room.wifi_ssid||"",wifiPassword:room.wifi_password||"",youtubeDoorLink:room.intro_video_url||room.youtube_door_link||"",checkoutLink:link,extensionLink:link});
       setStep(5);
     }catch(e){ err(e); }
     setBusy(false);
@@ -947,7 +963,7 @@ function Guest({onAdmin,initialCode}) {
   useEffect(()=>{ if(booking?.code) sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})).catch(()=>setInbox({messages:[],infos:[]})); },[booking]);
   const sendG=async()=>{ if(!gmsg.trim()||!booking?.code)return; const {error}=await sb.rpc("mz_guest_send",{p_code:booking.code,p_body:gmsg.trim()}); if(error)return err(error); setGmsg(""); sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})); };
   const reqG=async(type,body)=>{ if(!booking?.code)return; const {error}=await sb.rpc("mz_guest_request",{p_code:booking.code,p_type:type,p_body:body}); if(error)return err(error); toast("Antrag gesendet – wir melden uns."); sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})); };
-  const reqVerlaengern=()=>{ const d=prompt("Bis wann möchtest du verlängern? (TT.MM.JJJJ)"); if(d) reqG("extension","Verlängerung beantragt bis "+d); };
+  const reqVerlaengern=()=>{ const d=prompt("Bis wann möchtest du verlängern? (TT.MM.JJJJ)"); if(d){ reqG("extension","Verlängerung beantragt bis "+d); sendMail("extension_request",BUCHUNG_EMAIL,"de",{guestName:booking.guest_name||"Gast",roomNumber:booking.rooms?.room_number||"",reservationCode:booking.code,requestedDate:d,reason:"Vom Gast über die App beantragt"}); } };
   useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
   const lookup=async()=>{ if(!code.trim())return; setBusy(true);
     const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link,photos,intro_video_url,capacity,cleaning_objekte(name,address))").eq("code",code.trim().toUpperCase()).maybeSingle();
