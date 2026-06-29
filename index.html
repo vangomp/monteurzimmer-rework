@@ -1455,8 +1455,8 @@ function Gaestekommunikation({bump}){
       <Card className="p-0 overflow-hidden md:col-span-1">
         <div className="p-2 border-b border-slate-100"><input value={q} onChange={e=>setQ(e.target.value)} placeholder={mode==="firma"?"🔍 Firma/Kunde suchen…":"🔍 Haus suchen…"} className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm"/></div>
         <div className="divide-y divide-slate-100 max-h-[58vh] overflow-y-auto">{list.map(it=>{const on=String(sel)===it.key;const lm=it.thread?msgsOfThread(it.thread.id).slice(-1)[0]:null;return(
-          <button key={it.key} onClick={()=>openItem(it)} className={"w-full text-left px-3 py-2.5 hover:bg-slate-50 "+(on?"bg-blue-50":"")}>
-            <div className="flex items-center justify-between gap-2"><span className="font-semibold text-slate-800 text-sm truncate">{it.label}</span>{it.unread>0&&<span className="shrink-0"><Pill text={`● persönlich ${it.unread}`} cls="bg-amber-100 text-amber-700"/></span>}</div>
+          <button key={it.key} onClick={()=>openItem(it)} className={"w-full text-left px-3 py-2.5 border-l-4 hover:bg-slate-50 "+(on?"bg-blue-50 border-blue-500":it.unread>0?"bg-amber-50 border-amber-400":"border-transparent")}>
+            <div className="flex items-center justify-between gap-2"><span className={"text-sm truncate "+(it.unread>0?"font-extrabold text-slate-900":"font-semibold text-slate-800")}>{it.unread>0?"🔵 ":""}{it.label}</span>{it.unread>0&&<span className="shrink-0"><Pill text={`${it.unread} neu`} cls="bg-amber-400 text-white"/></span>}</div>
             <div className="text-xs text-slate-400 truncate">{lm?(lm.sender==="team"?"Du: ":"")+(lm.body||"[Anhang]"):(it.thread?"—":"noch kein Chat – jetzt anschreiben")}</div>
           </button>);})}
           {!list.length&&<div className="p-4 text-sm text-slate-400">Keine {mode==="firma"?"Firmen":"Häuser"} gefunden.</div>}
