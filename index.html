@@ -977,10 +977,11 @@ function Guest({onAdmin,initialCode}) {
   const reqVerlaengern=()=>{ const d=prompt("Bis wann möchtest du verlängern? (TT.MM.JJJJ)"); if(d){ reqG("extension","Verlängerung beantragt bis "+d); sendMail("extension_request",BUCHUNG_EMAIL,"de",{guestName:booking.guest_name||"Gast",roomNumber:booking.rooms?.room_number||"",reservationCode:booking.code,requestedDate:d,reason:"Vom Gast über die App beantragt"}); } };
   useEffect(()=>{ sb.from("settings").select("value").eq("key","house_rules").maybeSingle().then(({data})=>{ if(Array.isArray(data?.value)) setHr(data.value); }); },[]);
   const lookup=async()=>{ if(!code.trim())return; setBusy(true);
-    const {data,error}=await sb.from("reservations").select("*, rooms(room_number,door_code,house_door_code,wifi_ssid,wifi_password,whatsapp_url,house_rules,youtube_door_link,photos,intro_video_url,capacity,cleaning_objekte(name,address))").eq("code",code.trim().toUpperCase()).maybeSingle();
-    if(error||!data){ setBusy(false); toast("Code nicht gefunden","err"); return; }
-    const {count}=await sb.from("check_ins").select("id",{count:"exact",head:true}).eq("reservation_id",data.id);
-    setBusy(false); setBooking(data); setGlang(data.preferred_language||"de"); setCheckedIn((count||0)>0); };
+    const {data,error}=await sb.rpc("get_checkin_reservation",{p_code:code.trim().toUpperCase()});
+    setBusy(false);
+    if(error||!data||data.error){ toast("Code nicht gefunden","err"); return; }
+    const resv=data.reservation||{}; resv.rooms={...(data.room||{}), cleaning_objekte:data.objekt||{}};
+    setBooking(resv); setGlang(resv.preferred_language||"de"); setCheckedIn(!!data.has_checkin); };
   useEffect(()=>{ if(initialCode&&initialCode.trim()) lookup(); },[]);
   const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
     if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
