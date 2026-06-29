@@ -863,6 +863,12 @@ function CompanyPortal({code}){
   useEffect(()=>{ if(code) load(); },[code]);
   const submitPersons=async()=>{ if(!delta.trim())return toast("Bitte Anzahl/Änderung angeben","err"); const body=`Personenbedarf: ${delta} ${L("ab","from")} ${from||L("sofort","now")}${note?(" – "+note):""} (genehmigungspflichtig)`; const {error}=await sb.rpc("mz_company_request",{p_code:code,p_type:"persons_change",p_body:body}); if(error)return err(error); setSent(true); setDelta("");setFrom("");setNote(""); };
   const sendChat=async()=>{ if(!chat.trim())return; const {error}=await sb.rpc("mz_company_request",{p_code:code,p_type:"chat",p_body:chat.trim()}); if(error)return err(error); setChat(""); toast(L("Nachricht gesendet","Message sent")); };
+  const [wgbFor,setWgbFor]=useState(null); const [wgbP,setWgbP]=useState([]); const [wgbBusy,setWgbBusy]=useState(false); const [vidFor,setVidFor]=useState("");
+  const openWgb=(r)=>{ setWgbP([{name:r.guest_name||"",geburtsdatum:"",geburtsort:""}]); setWgbFor(r.code); };
+  const wgbU=(i,k,v)=>setWgbP(ps=>ps.map((p,j)=>j===i?{...p,[k]:v}:p));
+  const wgbSend=async()=>{ if(!wgbP.some(p=>p.name.trim()))return toast("Bitte Namen","err"); setWgbBusy(true); try{ const {error}=await sb.functions.invoke("wgb-issue",{body:{code:wgbFor,vorgang:"Einzug",personen:wgbP.filter(p=>p.name.trim())}}); if(error)throw error; sb.rpc("mz_company_request",{p_code:code,p_type:"wgb_request",p_body:"WGB beantragt ("+wgbFor+"): "+wgbP.map(p=>p.name).filter(Boolean).join(", ")}).then(()=>{},()=>{}); setWgbFor(null); toast(L("WGB beantragt – geht ans Team.","Requested – sent to team.")); }catch(e){ err(e);} setWgbBusy(false); };
+  const uploadVid=async(rcode,file)=>{ if(!file)return; setVidFor(rcode); try{ const path=rcode+"/checkout-"+Date.now()+"-"+(file.name||"video").replace(/[^\w.\-]/g,"_"); const up=await sb.storage.from("checkout-videos").upload(path,file,{upsert:true,contentType:file.type||"video/mp4"}); if(up.error)throw up.error; await sb.rpc("mz_guest_checkout_video",{p_code:rcode,p_path:path}); toast(L("Auszugsvideo hochgeladen!","Move-out video uploaded!")); }catch(e){ err(e);} setVidFor(""); };
+  const reqRoom=(r,type)=>{ let body; if(type==="extension"){ const d=prompt(L("Verlängerung bis? (TT.MM.JJJJ)","Extend until? (DD.MM.YYYY)")); if(!d)return; body="📅 Verlängerung "+(r.haus||"")+" "+roomShort(r.room)+" (Code "+r.code+") bis "+d; } else { if(!confirm(L("Auschecken beantragen für ","Request check-out for ")+roomShort(r.room)+"?"))return; body="🧳 Auschecken "+(r.haus||"")+" "+roomShort(r.room)+" (Code "+r.code+") zum "+fmt(r.check_out_date); } sb.rpc("mz_company_request",{p_code:code,p_type:type,p_body:body}).then(()=>toast(L("Anfrage gesendet.","Request sent.")),()=>{}); };
   if(data===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400">Lädt…</div>;
   if(data===null) return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm p-4 text-center">{L("Firmen-Code nicht gefunden.","Company code not found.")}</div>;
   const res=data.reservations||[]; const totalP=res.reduce((a,r)=>a+(r.persons||0),0); const houses=[...new Set(res.map(r=>r.haus).filter(Boolean))];
@@ -873,10 +879,28 @@ function CompanyPortal({code}){
       <div className="flex gap-1">{["de","en"].map(l=><button key={l} onClick={()=>setGlang(l)} className={"text-xs px-2 py-1 rounded font-semibold "+(glang===l?"bg-blue-600 text-white":"bg-slate-100 text-slate-500")}>{l.toUpperCase()}</button>)}</div>
     </div>
     <Card className="p-0 overflow-x-auto"><table className="w-full text-sm">
-      <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-3">{L("Haus / Zimmer","House / room")}</th><th className="text-left p-3">{L("Gast","Guest")}</th><th className="text-left p-3">{L("Zeitraum","Period")}</th><th className="text-right p-3">{L("Pers.","Pers.")}</th></tr></thead>
-      <tbody>{res.map((r,i)=>(<tr key={i} className="border-t border-slate-100"><td className="p-3 text-slate-700">{r.haus?r.haus+" · ":""}{roomShort(r.room)}</td><td className="p-3 text-slate-600">{r.guest_name||"—"}</td><td className="p-3 text-slate-600 whitespace-nowrap">{fmt(r.check_in_date)} – {fmt(r.check_out_date)}</td><td className="p-3 text-right text-slate-700">{r.persons||"—"}{r.capacity?`/${r.capacity}`:""}</td></tr>))}
-      {!res.length&&<tr><td colSpan="4" className="p-5 text-center text-slate-400">{L("Noch keine Buchungen.","No bookings yet.")}</td></tr>}</tbody>
+      <thead className="bg-slate-50 text-slate-500 text-xs uppercase"><tr><th className="text-left p-3">{L("Haus / Zimmer","House / room")}</th><th className="text-left p-3">{L("Gast","Guest")}</th><th className="text-left p-3">{L("Zeitraum","Period")}</th><th className="text-right p-3">{L("Pers.","Pers.")}</th><th className="text-right p-3">{L("Aktionen","Actions")}</th></tr></thead>
+      <tbody>{res.map((r,i)=>(<tr key={i} className="border-t border-slate-100">
+        <td className="p-3 text-slate-700">{r.haus?r.haus+" · ":""}{roomShort(r.room)}</td>
+        <td className="p-3 text-slate-600">{r.guest_name||"—"}</td>
+        <td className="p-3 text-slate-600 whitespace-nowrap">{fmt(r.check_in_date)} – {fmt(r.check_out_date)}</td>
+        <td className="p-3 text-right text-slate-700">{r.persons||"—"}{r.capacity?`/${r.capacity}`:""}</td>
+        <td className="p-3 text-right whitespace-nowrap">
+          <label title={L("Auszugsvideo","Move-out video")} className="inline-block text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold cursor-pointer mr-1">{vidFor===r.code?"…":"🎥"}<input type="file" accept="video/*" className="hidden" onChange={e=>uploadVid(r.code,e.target.files&&e.target.files[0])}/></label>
+          <button onClick={()=>openWgb(r)} title="WGB" className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-700 font-semibold mr-1">📋</button>
+          <button onClick={()=>reqRoom(r,"extension")} title={L("Verlängern","Extend")} className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 font-semibold mr-1">📅</button>
+          <button onClick={()=>reqRoom(r,"checkout")} title={L("Auschecken","Check-out")} className="text-xs px-2 py-1 rounded bg-slate-100 text-slate-700 font-semibold mr-1">🧳</button>
+          <a href={"/?code="+r.code} target="_blank" rel="noreferrer" title={L("Zimmer-Portal","Room portal")} className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700 font-semibold">🔗</a>
+        </td></tr>))}
+      {!res.length&&<tr><td colSpan="5" className="p-5 text-center text-slate-400">{L("Noch keine Buchungen.","No bookings yet.")}</td></tr>}</tbody>
     </table></Card>
+    <div className="text-[11px] text-slate-400 px-1">🎥 {L("Auszugsvideo","Move-out video")} · 📋 WGB · 📅 {L("Verlängern","Extend")} · 🧳 {L("Auschecken","Check-out")} · 🔗 {L("Zimmer-Portal (alle Gast-Funktionen)","Room portal (all guest functions)")}</div>
+    <div style={{animation:"mzGlow 1.8s ease-in-out infinite"}} className="bg-gradient-to-br from-emerald-500 via-green-500 to-teal-500 text-white rounded-2xl p-5">
+      <style dangerouslySetInnerHTML={{__html:"@keyframes mzGlow{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.4)}50%{box-shadow:0 0 22px 7px rgba(16,185,129,.8)}}"}}/>
+      <div className="text-sm font-semibold opacity-95">💶 Cashback</div>
+      <div className="text-2xl font-extrabold mt-1">{L("25 € pro Zimmer","25 € per room")}</div>
+      <div className="text-xs opacity-90 mt-2">{L("Beim Auszug pro Zimmer: 5-Sterne-Google-Bewertung mit Text + Auszugsvideo (sauberes Zimmer) = 25 € zurück. Video oben pro Zimmer (🎥) hochladen; den Bewertungslink findest du im jeweiligen Zimmer-Portal (🔗).","At move-out per room: 5-star Google review + clean move-out video = 25 € back. Upload video per room (🎥); review link in each room portal (🔗).")}</div>
+    </div>
     <div className="grid md:grid-cols-2 gap-4 items-start">
       <Card className="p-5">
         <h3 className="font-semibold text-slate-800 mb-1">👥 {L("Personenbedarf melden","Report staffing needs")}</h3>
@@ -896,6 +920,21 @@ function CompanyPortal({code}){
           <img alt="QR" className="mx-auto rounded-lg border border-slate-200" width="130" height="130" src={"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data="+encodeURIComponent(typeof window!=="undefined"?window.location.href:"")}/></div>
       </Card>
     </div>
+    {wgbFor&&<Modal title={"📋 "+L("Wohnungsgeberbescheinigung","Residence confirmation")+" · "+wgbFor} onClose={()=>setWgbFor(null)}>
+      <p className="text-sm text-slate-600 mb-3">{L("Daten je Person ergänzen. Wir erstellen die Bescheinigung und schicken sie ans Team.","Add data per person. We create the confirmation and send it to the team.")}</p>
+      <div className="space-y-3 max-h-[50vh] overflow-y-auto">{wgbP.map((p,i)=>(
+        <div key={i} className="rounded-xl border border-slate-200 p-3 space-y-2">
+          <input className={inputCls} placeholder={L("Vollständiger Name","Full name")} value={p.name} onChange={e=>wgbU(i,"name",e.target.value)}/>
+          <div className="grid grid-cols-2 gap-2">
+            <input className={inputCls} type="date" value={p.geburtsdatum} onChange={e=>wgbU(i,"geburtsdatum",e.target.value)} title="Geburtsdatum"/>
+            <input className={inputCls} placeholder={L("Geburtsort","Place of birth")} value={p.geburtsort} onChange={e=>wgbU(i,"geburtsort",e.target.value)}/>
+          </div>
+        </div>))}</div>
+      <div className="flex justify-between items-center mt-2">
+        <button type="button" onClick={()=>setWgbP(ps=>[...ps,{name:"",geburtsdatum:"",geburtsort:""}])} className="text-xs text-blue-600 font-semibold">+ {L("Person","Person")}</button>
+        <div className="flex gap-2"><Btn kind="soft" onClick={()=>setWgbFor(null)}>{L("Abbrechen","Cancel")}</Btn><Btn kind="ok" onClick={wgbSend}>{wgbBusy?"…":"✓ "+L("Beantragen","Request")}</Btn></div>
+      </div>
+    </Modal>}
   </div></div>);
 }
 
