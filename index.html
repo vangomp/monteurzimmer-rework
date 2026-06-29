@@ -523,6 +523,9 @@ function RoomForm({rec,objekte,onSave,onClose}) {
 function CheckIns({bump}) {
   const [rows,reload]=useList(loaders.checkins,[bump]);
   const [q,setQ]=useState("");
+  const [idView,setIdView]=useState(null);
+  const viewId=async(c)=>{ const paths=[c.id_card_url,c.id_card_back_url].filter(Boolean); if(!paths.length)return toast("Kein Ausweis hinterlegt","err"); const urls=[]; for(const p of paths){ const {data,error}=await sb.storage.from("id-cards").createSignedUrl(p,3600); if(error){err(error);continue;} if(data?.signedUrl)urls.push(data.signedUrl);} setIdView({name:c.full_name,urls}); };
+  const viewVideo=async(c)=>{ if(!c.checkout_video_url)return toast("Kein Video hinterlegt","err"); const {data,error}=await sb.storage.from("checkout-videos").createSignedUrl(c.checkout_video_url,3600); if(error)return err(error); if(data?.signedUrl)window.open(data.signedUrl,"_blank"); };
   const [sort,setSort]=useState({key:"checked",dir:"desc"});
   if(!rows) return <Skeleton/>;
   const ql=q.trim().toLowerCase();
@@ -547,17 +550,25 @@ function CheckIns({bump}) {
             <td className="p-3 text-slate-500 text-xs">{c.email}<br/>{c.phone}</td>
             <td className="p-3 text-slate-600">{roomShort(c.reservations?.rooms?.room_number)}</td>
             <td className="p-3 text-slate-600">{fmt(c.checked_in_at)}</td>
-            <td className="p-3">{c.id_card_url?<span className="text-emerald-600 text-xs">✓ vorhanden</span>:<span className="text-slate-400 text-xs">—</span>}</td>
+            <td className="p-3">{c.id_card_url?<button onClick={()=>viewId(c)} className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 font-semibold">👁 Ansehen</button>:<span className="text-slate-400 text-xs">—</span>}</td>
             <td className="p-3">{ciDone?<Pill text="✓ abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
             <td className="p-3">{c.checkout_completed_at?<Pill text="abgeschlossen" cls="bg-emerald-100 text-emerald-700"/>:<Pill text="offen" cls="bg-amber-100 text-amber-700"/>}</td>
-            <td className="p-3">{c.checkout_video_ok===true?<Pill text="OK ✓" cls="bg-emerald-100 text-emerald-700"/>
-              :c.checkout_video_ok===false?<Pill text="Beanstandet ✗" cls="bg-rose-100 text-rose-700"/>
-              :vid?<div className="flex gap-1"><button onClick={()=>setVideoOk(c,true)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold">OK</button><button onClick={()=>setVideoOk(c,false)} className="text-xs px-2 py-1 rounded bg-rose-600 text-white font-semibold">✗</button></div>
-              :<span className="text-slate-400 text-xs">—</span>}</td>
+            <td className="p-3">{vid?<div className="flex items-center gap-1 flex-wrap">
+              <button onClick={()=>viewVideo(c)} className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-700 font-semibold">▶ Video</button>
+              {c.checkout_video_ok===true?<Pill text="OK ✓" cls="bg-emerald-100 text-emerald-700"/>
+                :c.checkout_video_ok===false?<Pill text="Beanstandet ✗" cls="bg-rose-100 text-rose-700"/>
+                :<><button onClick={()=>setVideoOk(c,true)} className="text-xs px-2 py-1 rounded bg-emerald-600 text-white font-semibold">OK</button><button onClick={()=>setVideoOk(c,false)} className="text-xs px-2 py-1 rounded bg-rose-600 text-white font-semibold">✗</button></>}
+            </div>:<span className="text-slate-400 text-xs">—</span>}</td>
           </tr>);})}
           {!shown.length&&<tr><td colSpan="9" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
         </tbody></table></Card>
       <p className="text-xs text-slate-400">„Video-Analyse" jetzt manuell (OK/✗) → später automatisch durch die KI-Auswertung; speist die 20 €-Cashback-Freigabe.</p>
+      {idView&&<Modal title={"🪪 Ausweis · "+(idView.name||"")} onClose={()=>setIdView(null)}>
+        {idView.urls.length? <div className="space-y-3">{idView.urls.map((u,i)=>(
+          <a key={i} href={u} target="_blank" rel="noreferrer"><img src={u} alt={"Ausweis "+(i+1)} className="w-full rounded-lg border border-slate-200"/></a>))}
+          <p className="text-xs text-slate-400">Klick aufs Bild öffnet es groß. Links sind ~1 Stunde gültig.</p></div>
+          : <p className="text-sm text-slate-400">Ausweis-Bilder konnten nicht geladen werden.</p>}
+      </Modal>}
     </div>
   );
 }
