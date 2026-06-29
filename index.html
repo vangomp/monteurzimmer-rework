@@ -97,7 +97,9 @@ const BUCHUNG_EMAIL="buchung@jjrealestate.de";
 // Ruft die bestehende send-email Edge-Function auf (Gmail-SMTP). subject wird serverseitig pro Template/Sprache überschrieben.
 async function sendMail(template,to,language,data){
   if(!to) return {skipped:"no recipient"};
-  try{ const {data:res,error}=await sb.functions.invoke("send-email",{body:{to,subject:"JJ Real Estate",template,language:language||"de",data:data||{}}});
+  const d={...(data||{})};
+  if(!d.platformLink){ const base=(typeof window!=="undefined"?window.location.origin:"https://monteurzimmer-rework.vercel.app"); d.platformLink=d.reservationCode?base+"/?code="+d.reservationCode:base; }
+  try{ const {data:res,error}=await sb.functions.invoke("mz-email",{body:{to,template,language:language||"de",data:d}});
     if(error){ console.warn("sendMail",template,error); return {error}; }
     return {ok:true,res};
   }catch(e){ console.warn("sendMail",template,e); return {error:e}; }
@@ -157,7 +159,7 @@ const loaders = {
   companyMsgs: ()=> sb.from("messages").select("*").order("created_at").then(r=>r.data||[]),
   houseThreads: ()=> sb.from("house_threads").select("*, cleaning_objekte(code,name)").order("last_message_at",{ascending:false,nullsFirst:false}).then(r=>r.data||[]),
   houseMsgs: ()=> sb.from("house_messages").select("*").order("created_at").then(r=>r.data||[]),
-  companies: ()=> sb.from("companies").select("id,name,display_name").order("name").then(r=>r.data||[]),
+  companies: ()=> sb.from("companies").select("id,name,display_name,email").order("name").then(r=>r.data||[]),
 };
 
 /* ============================ COCKPIT ============================ */
@@ -1341,13 +1343,20 @@ function Gaestekommunikation({bump}){
     if(mode==="firma"){ let tid=threadForCompany(sel)?.id; if(!tid){ const {data,error}=await sb.from("company_threads").insert({company_id:sel,last_message_at:new Date().toISOString()}).select("id").single(); if(error)return err(error); tid=data.id; }
       const {error}=await sb.from("messages").insert({thread_id:tid,sender:"team",body:reply.trim(),type:"chat"}); if(error)return err(error);
       await sb.from("company_threads").update({last_message_at:new Date().toISOString()}).eq("id",tid);
+      const co=companies.find(c=>String(c.id)===String(sel));
+      if(co?.email) sendMail("message_notification",co.email,"de",{title:"Neue Nachricht von JJ Real Estate",lead:"Sie haben eine neue Nachricht von JJ Real Estate:",messageBody:reply.trim()});
     } else { let tid=threadForHouse(sel)?.id; if(!tid){ const {data,error}=await sb.from("house_threads").insert({objekt_id:sel,last_message_at:new Date().toISOString()}).select("id").single(); if(error)return err(error); tid=data.id; }
       const {error}=await sb.from("house_messages").insert({thread_id:tid,sender:"team",author:"Team",body:reply.trim(),type:"chat"}); if(error)return err(error);
       await sb.from("house_threads").update({last_message_at:new Date().toISOString()}).eq("id",tid); }
     setReply(""); reloadAll(); };
   const sendBroadcast=async()=>{ if(!bcBody.trim()||!bcHouses.length)return toast("Text + mind. ein Haus wählen","err");
     const {error}=await sb.from("broadcasts").insert({body:bcBody.trim(),target_houses:bcHouses,created_by:"Jarne"}); if(error)return err(error);
-    toast("Aushang gesendet an "+bcHouses.length+" Haus/Häuser"); setBcOpen(false); setBcBody(""); setBcHouses([]); };
+    try{ const {data:rs}=await sb.from("reservations").select("companies(email), rooms(cleaning_objekte(code))").is("archived_at",null);
+      const emails=new Set(); (rs||[]).forEach(r=>{ const code=r.rooms?.cleaning_objekte?.code; if(code&&bcHouses.includes(code)&&r.companies?.email) emails.add(r.companies.email); });
+      emails.forEach(em=>sendMail("message_notification",em,"de",{title:"Info zu deiner Unterkunft",lead:"Wichtige Info zu deiner Unterkunft:",messageBody:bcBody.trim()}));
+      toast("Aushang gesendet · "+emails.size+" Firma(en) per E-Mail benachrichtigt");
+    }catch(e){ console.warn(e); toast("Aushang gesendet an "+bcHouses.length+" Haus/Häuser"); }
+    setBcOpen(false); setBcBody(""); setBcHouses([]); };
   return (<div className="space-y-4">
     <PageHead title="Gästekommunikation" sub={`Chat pro Firma/Kunde oder pro Haus · ${totalUnread} ungelesen`} right={<Btn size="sm" onClick={()=>setBcOpen(true)}>📢 Aushang senden</Btn>}/>
     <div className="flex gap-1">{[["firma","Nach Firma/Kunde"],["haus","Nach Haus"]].map(([k,l])=>(
