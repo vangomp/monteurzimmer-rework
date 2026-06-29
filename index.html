@@ -142,7 +142,7 @@ function useList(loader, deps=[]) {
 const loaders = {
   rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number").then(r=>r.data||[]),
   roomsMin: ()=> sb.from("rooms").select("id,room_number,capacity").order("room_number").then(r=>r.data||[]),
-  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address,wifi_ssid,wifi_password,description").order("code").then(r=>r.data||[]),
+  objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address,wifi_ssid,wifi_password,description,google_review_url").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
   checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
   anmeldungen: ()=> sb.from("check_ins").select("id, full_name, birth_date, birth_place, checked_in_at, wgb_issued_at, reservations(guest_name, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(code,name,address)))").order("checked_in_at",{ascending:false}).then(r=>r.data||[]),
@@ -617,7 +617,7 @@ function Cleaning({bump}) {
     toast("An Slavik (IMMODAY) übergeben + als Zusatzkosten markiert"); reloadR(); }catch(e){err(e);} };
   const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
     if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
-  const saveHouse=async(f)=>{ try{ const p={code:f.code,name:f.name||null,address:f.address||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,description:f.description||null,updated_at:new Date().toISOString()};
+  const saveHouse=async(f)=>{ try{ const p={code:f.code,name:f.name||null,address:f.address||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,description:f.description||null,google_review_url:f.google_review_url||null,updated_at:new Date().toISOString()};
     if(hEdit==="new"){ const {error}=await sb.from("cleaning_objekte").insert(p); if(error)throw error; toast("Haus angelegt"); }
     else { const {error}=await sb.from("cleaning_objekte").update(p).eq("id",hEdit.id); if(error)throw error; toast("Haus gespeichert"); }
     setHEdit(null); reloadObj(); }catch(e){err(e);} };
@@ -689,7 +689,7 @@ function Cleaning({bump}) {
   );
 }
 function HouseForm({rec,onSave,onClose}){
-  const [f,setF]=useState({code:rec?.code||"",name:rec?.name||"",address:rec?.address||"",wifi_ssid:rec?.wifi_ssid||"",wifi_password:rec?.wifi_password||"",description:rec?.description||""});
+  const [f,setF]=useState({code:rec?.code||"",name:rec?.name||"",address:rec?.address||"",wifi_ssid:rec?.wifi_ssid||"",wifi_password:rec?.wifi_password||"",description:rec?.description||"",google_review_url:rec?.google_review_url||""});
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
   return (<Modal title={rec?`Haus ${rec.code}`:"Neues Haus"} onClose={onClose}>
     <div className="grid grid-cols-2 gap-3">
@@ -702,6 +702,7 @@ function HouseForm({rec,onSave,onClose}){
       <Field label="WLAN-Passwort"><input className={inputCls} value={f.wifi_password} onChange={e=>u("wifi_password",e.target.value)}/></Field>
     </div>
     <Field label="Beschreibung (optional)"><input className={inputCls} value={f.description} onChange={e=>u("description",e.target.value)}/></Field>
+    <Field label="Google-Bewertungslink (für Cashback-Button)"><input className={inputCls} value={f.google_review_url} onChange={e=>u("google_review_url",e.target.value)} placeholder="https://g.page/r/… oder Google-Rezension-Link dieses Hauses"/></Field>
     <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn><Btn kind="ok" onClick={()=>{if(!f.code)return toast("Code nötig","err");onSave(f);}}>Speichern</Btn></div>
   </Modal>);
 }
@@ -1049,7 +1050,7 @@ function Guest({onAdmin,initialCode}) {
       <div className="flex items-start gap-2"><span className="font-bold">1.</span><span>{L("5-Sterne-Google-Bewertung mit kurzem Text","5-star Google review with a short text")}</span></div>
       <div className="flex items-start gap-2"><span className="font-bold">2.</span><span>{L("Auszugsvideo deines Zimmers (sauber)","Move-out video of your clean room")}</span></div>
     </div>
-    <a href={GOOGLE_REVIEW_URL} target="_blank" rel="noreferrer" className="mt-3 block text-center bg-yellow-300 text-slate-900 rounded-xl py-3 font-bold">⭐ {L("Jetzt 5★ auf Google bewerten","Leave a 5★ Google review")}</a>
+    <a href={room.cleaning_objekte?.google_review_url||GOOGLE_REVIEW_URL} target="_blank" rel="noreferrer" className="mt-3 block text-center bg-yellow-300 text-slate-900 rounded-xl py-3 font-bold">⭐ {L("Jetzt 5★ auf Google bewerten","Leave a 5★ Google review")}</a>
     <div className="text-xs opacity-90 mt-3">{L("Im Video muss zu sehen sein:","Must be visible in the video:")}</div>
     <div className="flex flex-wrap gap-1.5 mt-1">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
     <div className="mt-3">{checkoutBlock}</div>
@@ -1164,7 +1165,7 @@ function Guest({onAdmin,initialCode}) {
       {pop==="phase"&&phaseIdx===4&&<Modal title={"💶 "+L("Auszug – "+CASHBACK_EUR+" € Cashback","Move-out – "+CASHBACK_EUR+" € cashback")} onClose={()=>setPop(null)}>
         <div className="bg-gradient-to-br from-emerald-500 via-green-500 to-teal-500 text-white rounded-2xl p-4">
           <div className="text-sm font-bold">{L("So gibt's "+CASHBACK_EUR+" € zurück: 5★-Google-Bewertung mit Text + Auszugsvideo.","Get "+CASHBACK_EUR+" € back: 5★ Google review with text + move-out video.")}</div>
-          <a href={GOOGLE_REVIEW_URL} target="_blank" rel="noreferrer" className="mt-2 block text-center bg-yellow-300 text-slate-900 rounded-xl py-2.5 font-bold">⭐ {L("Jetzt 5★ bewerten","Leave a 5★ review")}</a>
+          <a href={room.cleaning_objekte?.google_review_url||GOOGLE_REVIEW_URL} target="_blank" rel="noreferrer" className="mt-2 block text-center bg-yellow-300 text-slate-900 rounded-xl py-2.5 font-bold">⭐ {L("Jetzt 5★ bewerten","Leave a 5★ review")}</a>
           <div className="flex flex-wrap gap-1.5 mt-2">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
           <div className="mt-3">{checkoutBlock}</div>
         </div>
