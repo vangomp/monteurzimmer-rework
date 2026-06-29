@@ -984,6 +984,7 @@ function Guest({onAdmin,initialCode}) {
   const [issue,setIssue]=useState({category:"",message:""}); const [issueSent,setIssueSent]=useState(false);
   const [inbox,setInbox]=useState(null); const [gmsg,setGmsg]=useState("");
   const [pop,setPop]=useState("save"); const [ciPersons,setCiPersons]=useState([]);
+  const [wgbForm,setWgbForm]=useState(null); const [wgbBusy,setWgbBusy]=useState(false);
   useEffect(()=>{ if(!booking?.code)return; const load=()=>sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})).catch(()=>setInbox({messages:[],infos:[]})); load(); const id=setInterval(load,15000); return ()=>clearInterval(id); },[booking]);
   useEffect(()=>{ if(booking?.id&&checkedIn) sb.from("check_ins").select("full_name").eq("reservation_id",booking.id).then(({data})=>setCiPersons((data||[]).map(x=>x.full_name).filter(Boolean))); },[booking,checkedIn]);
   const sendG=async()=>{ if(!gmsg.trim()||!booking?.code)return; const {error}=await sb.rpc("mz_guest_send",{p_code:booking.code,p_body:gmsg.trim()}); if(error)return err(error); setGmsg(""); sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})); };
@@ -1030,7 +1031,13 @@ function Guest({onAdmin,initialCode}) {
   const fmtD=(d)=>{try{return d?new Date(d).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"}):"";}catch(e){return"";}};
   const SUB=[fmtD(booking.created_at),fmtD(booking.check_in_date),fmtD(today0),fmtD(booking.check_out_date),fmtD(booking.check_out_date)];
   const checklist=[L("Jedes Zimmer & Bett","Each room & bed"),L("Boden & Bad","Floor & bath"),L("Kühlschrank leer","Fridge empty"),L("Kein Müll","No trash"),L("Fenster geschlossen","Windows closed")];
-  const wgbReq=()=>{ const who=ciPersons.length?(" für: "+ciPersons.join(", ")):""; reqG("wgb_request","Wohnungsgeberbescheinigung beantragt"+who); };
+  const wgbReq=()=>{ const base=(ciPersons.length?ciPersons:[booking.guest_name||""]).map(n=>({name:n||"",geburtsdatum:"",geburtsort:""})); setWgbForm(base); };
+  const wgbUpd=(i,k,v)=>setWgbForm(ps=>ps.map((p,j)=>j===i?{...p,[k]:v}:p));
+  const wgbSubmit=async()=>{ if(!wgbForm?.some(p=>p.name.trim()))return toast("Bitte mind. einen Namen","err"); setWgbBusy(true);
+    try{ const {error}=await sb.functions.invoke("wgb-issue",{body:{code:booking.code,vorgang:"Einzug",personen:wgbForm.filter(p=>p.name.trim()),einzugsdatum:booking.check_in_date}}); if(error)throw error;
+      reqG("wgb_request","Wohnungsgeberbescheinigung beantragt für: "+wgbForm.map(p=>p.name).filter(Boolean).join(", "));
+      setWgbForm(null); toast("WGB beantragt – geht ans Team."); }catch(e){ err(e); } setWgbBusy(false); };
+  const reqPersons=()=>{ const n=prompt(L("Für wie viele Personen möchtest du das Zimmer? (genehmigungspflichtig)","How many persons for the room? (needs approval)")); if(n&&n.trim()) reqG("persons_change","Änderung Personenzahl beantragt: "+n.trim()+" Person(en) (genehmigungspflichtig)"); };
   const shareLink=()=>{ const u=window.location.href; if(navigator.share){navigator.share({title:"JJ Real Estate Check-in",url:u}).catch(()=>{});} else if(navigator.clipboard){navigator.clipboard.writeText(u).then(()=>toast(L("Link kopiert","Link copied")),()=>window.prompt("Link",u));} else window.prompt("Link",u); };
   const uploadCheckoutVideo=async(file)=>{ if(!file)return; setPhase("evaluating"); try{
     const path=`${booking.id}/checkout-${Date.now()}-${(file.name||"video").replace(/[^\w.\-]/g,"_")}`;
@@ -1089,6 +1096,7 @@ function Guest({onAdmin,initialCode}) {
               <button onClick={reqVerlaengern} className="w-full border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">📅 {L("Verlängerung beantragen","Request extension")}</button>
               <button onClick={()=>{if(confirm(L("Auschecken zum ","Check out on ")+fmt(booking.check_out_date)+L(" beantragen?","?")))reqG("checkout","Auschecken beantragt (geplant: "+fmt(booking.check_out_date)+")");}} className="w-full border border-slate-300 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">🧳 {L("Auschecken beantragen","Request check-out")}</button>
               <button onClick={wgbReq} className="w-full border border-slate-300 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">📋 {L("Wohnungsgeberbescheinigung beantragen","Request residence confirmation")}</button>
+              <button onClick={reqPersons} className="w-full border border-slate-300 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">👥 {L("Mehr/weniger Personen beantragen","Request more/fewer persons")}</button>
               {ciPersons.length>0&&<p className="text-[11px] text-slate-400">{L("Wird für deine Check-in-Personen erstellt:","Issued for your checked-in persons:")} {ciPersons.join(", ")}</p>}
             </div>
           </Card>
@@ -1179,6 +1187,21 @@ function Guest({onAdmin,initialCode}) {
           <div className="mt-3">{checkoutBlock}</div>
         </div>
         <div className="mt-3 text-right"><Btn kind="soft" onClick={()=>setPop(null)}>{L("Schließen","Close")}</Btn></div>
+      </Modal>}
+      {wgbForm&&<Modal title={"📋 "+L("Wohnungsgeberbescheinigung","Residence confirmation")} onClose={()=>setWgbForm(null)}>
+        <p className="text-sm text-slate-600 mb-3">{L("Bitte Daten je Person prüfen/ergänzen. Wir erstellen die Bescheinigung und schicken sie ans Team.","Please check/complete the data per person. We create the confirmation and send it to the team.")}</p>
+        <div className="space-y-3 max-h-[50vh] overflow-y-auto">{wgbForm.map((p,i)=>(
+          <div key={i} className="rounded-xl border border-slate-200 p-3 space-y-2">
+            <input className={inputCls} placeholder={L("Vollständiger Name","Full name")} value={p.name} onChange={e=>wgbUpd(i,"name",e.target.value)}/>
+            <div className="grid grid-cols-2 gap-2">
+              <input className={inputCls} type="date" value={p.geburtsdatum} onChange={e=>wgbUpd(i,"geburtsdatum",e.target.value)} title="Geburtsdatum"/>
+              <input className={inputCls} placeholder={L("Geburtsort","Place of birth")} value={p.geburtsort} onChange={e=>wgbUpd(i,"geburtsort",e.target.value)}/>
+            </div>
+          </div>))}</div>
+        <div className="flex justify-between items-center mt-2">
+          <button type="button" onClick={()=>setWgbForm(ps=>[...ps,{name:"",geburtsdatum:"",geburtsort:""}])} className="text-xs text-blue-600 font-semibold">+ {L("Person","Person")}</button>
+          <div className="flex gap-2"><Btn kind="soft" onClick={()=>setWgbForm(null)}>{L("Abbrechen","Cancel")}</Btn><Btn kind="ok" onClick={wgbSubmit}>{wgbBusy?"…":"✓ "+L("Beantragen","Request")}</Btn></div>
+        </div>
       </Modal>}
     </div>
   );
@@ -1474,12 +1497,21 @@ function Gaestekommunikation({bump}){
       <Card className="p-0 md:col-span-2 flex flex-col min-h-[60vh]">
         {!sel?<div className="flex-1 flex items-center justify-center text-slate-400 text-sm p-6">{mode==="firma"?"Firma/Kunde links wählen, um zu chatten.":"Haus links wählen."}</div>:<React.Fragment>
           <div className="bg-slate-50 px-4 py-2 font-semibold text-slate-800 border-b border-slate-100">{selItem?selItem.label:""}</div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-2">{selMsgs.map(m=>(
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">{selMsgs.map(m=>{
+            const lbl=({problem:"🛠 Problem",extension:"📅 Verlängerung",checkout:"🧳 Auscheck-Antrag",checkout_video:"🎥 Check-out-Video",wgb_request:"📋 WGB-Antrag",persons_change:"👥 Personenzahl-Änderung",info:"📢 Info"})[m.type]||m.type;
+            const todo={extension:1,checkout:1,wgb_request:1,persons_change:1,problem:1}[m.type];
+            if(todo) return (
+              <div key={m.id} className="rounded-xl border-l-4 border-amber-500 bg-amber-50 px-3 py-2 text-sm">
+                <div className="flex items-center gap-2 mb-0.5"><span className="text-[10px] font-bold bg-amber-500 text-white rounded-full px-2 py-0.5">✅ To-do</span><span className="text-[11px] font-bold text-amber-700">{lbl}</span></div>
+                <div className="text-slate-800">{m.body}</div>
+                <div className="text-[10px] mt-1 text-slate-400">{m.author?m.author+" · ":""}{fmt(m.created_at)} · mit Mihaela/Jarne abstimmen</div>
+              </div>);
+            return (
             <div key={m.id} className={"max-w-[80%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"ml-auto bg-blue-600 text-white":"bg-slate-100 text-slate-800")}>
-              {m.type&&m.type!=="chat"&&<div className={"text-[10px] font-semibold mb-0.5 "+(m.sender==="team"?"text-blue-100":"text-slate-500")}>{({problem:"🛠 Problem",extension:"📅 Verlängerung",checkout:"🧳 Auscheck-Antrag",checkout_video:"🎥 Check-out-Video",wgb_request:"📋 WGB-Antrag",info:"📢 Info"})[m.type]||m.type}</div>}
+              {m.type&&m.type!=="chat"&&<div className={"text-[10px] font-semibold mb-0.5 "+(m.sender==="team"?"text-blue-100":"text-slate-500")}>{lbl}</div>}
               <div>{m.body}</div>{m.attachment_path&&<div className="text-[11px] mt-1 opacity-80">📎 Anhang</div>}
               <div className={"text-[10px] mt-1 "+(m.sender==="team"?"text-blue-100":"text-slate-400")}>{m.author?m.author+" · ":""}{fmt(m.created_at)}</div>
-            </div>))}
+            </div>);})}
             {!selMsgs.length&&<div className="text-sm text-slate-400 text-center mt-6">Noch keine Nachrichten – schreib der Firma die erste Nachricht.</div>}
           </div>
           <div className="border-t border-slate-100 p-3 flex gap-2">
