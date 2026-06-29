@@ -324,6 +324,7 @@ function Reservations({bump}) {
               <td className="p-3 text-center"><input type="checkbox" checked={!!r.qonto_billed} onChange={()=>toggleQonto(r)} className="w-4 h-4 accent-blue-600" title="Rechnung in Qonto erstellt"/></td>
               <td className="p-3 text-right whitespace-nowrap">
                 {r.status==="provisional"&&<IconBtn title="Fest bestätigen" color="text-emerald-600" onClick={()=>confirmRes(r)}>✓</IconBtn>}
+                <IconBtn title="Check-in-Link kopieren" color="text-indigo-600" onClick={()=>{const u=window.location.origin+"/?code="+r.code;(navigator.clipboard?.writeText(u)||Promise.reject()).then(()=>toast("Check-in-Link kopiert: "+r.code),()=>{window.prompt("Check-in-Link kopieren:",u);});}}>🔗</IconBtn>
                 <IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn>
                 <IconBtn title={r.archived_at?"Wiederherstellen":"Archivieren"} color="text-amber-600" onClick={()=>archive(r)}>{r.archived_at?"↩️":"📦"}</IconBtn>
                 <IconBtn title="Löschen" color="text-rose-600" onClick={()=>del(r)}>🗑</IconBtn>
@@ -935,8 +936,8 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
 }
 
 /* ============================ GUEST PORTAL ============================ */
-function Guest({onAdmin}) {
-  const [code,setCode]=useState(""),[booking,setBooking]=useState(null),[busy,setBusy]=useState(false);
+function Guest({onAdmin,initialCode}) {
+  const [code,setCode]=useState(initialCode||""),[booking,setBooking]=useState(null),[busy,setBusy]=useState(false);
   const [checkedIn,setCheckedIn]=useState(undefined);
   const ELEMENTS=["Zimmer & Bett","Boden","Bad","Kühlschrank (leer)","Müll entfernt","Fenster geschlossen"];
   const [phase,setPhase]=useState("idle"),[detected,setDetected]=useState({});
@@ -953,6 +954,7 @@ function Guest({onAdmin}) {
     if(error||!data){ setBusy(false); toast("Code nicht gefunden","err"); return; }
     const {count}=await sb.from("check_ins").select("id",{count:"exact",head:true}).eq("reservation_id",data.id);
     setBusy(false); setBooking(data); setGlang(data.preferred_language||"de"); setCheckedIn((count||0)>0); };
+  useEffect(()=>{ if(initialCode&&initialCode.trim()) lookup(); },[]);
   const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
     if(!follow){d["Kühlschrank (leer)"]=false;setDetected(d);setPhase("review");}else{setDetected(d);setPhase("done");}},2200); };
   const missing=ELEMENTS.filter(e=>detected[e]===false);
@@ -1568,12 +1570,13 @@ function Admin({session}) {
 }
 
 function App() {
+  const urlCode=(typeof window!=="undefined")?(new URLSearchParams(window.location.search).get("code")||"").trim().toUpperCase():"";
   const [session,setSession]=useState(undefined);
-  const [guest,setGuest]=useState(false);
+  const [guest,setGuest]=useState(!!urlCode);
   useEffect(()=>{ sb.auth.getSession().then(({data})=>setSession(data.session));
     const {data:sub}=sb.auth.onAuthStateChange((_e,s)=>setSession(s)); return ()=>sub.subscription.unsubscribe(); },[]);
   let body;
-  if(guest) body=<Guest onAdmin={()=>setGuest(false)}/>;
+  if(guest) body=<Guest onAdmin={()=>setGuest(false)} initialCode={urlCode}/>;
   else if(session===undefined) body=<div className="min-h-screen flex items-center justify-center text-slate-400">Lädt…</div>;
   else if(!session) body=<Login onGuest={()=>setGuest(true)}/>;
   else body=<Admin session={session}/>;
