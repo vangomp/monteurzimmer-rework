@@ -94,6 +94,8 @@ function Toasts(){
 const toast=(t,k)=>toastFn(t,k);
 const err=(e)=>{ console.error(e); toast((e&&e.message)||"Fehler","err"); };
 const BUCHUNG_EMAIL="buchung@jjrealestate.de";
+const GOOGLE_REVIEW_URL="https://www.google.com/search?q=JJ+Real+Estate+Monteurzimmer"; // TODO: durch echten Google-Bewertungslink ersetzen
+const CASHBACK_EUR=25;
 // Ruft die bestehende send-email Edge-Function auf (Gmail-SMTP). subject wird serverseitig pro Template/Sprache überschrieben.
 async function sendMail(template,to,language,data){
   if(!to) return {skipped:"no recipient"};
@@ -562,7 +564,7 @@ function CheckIns({bump}) {
           </tr>);})}
           {!shown.length&&<tr><td colSpan="9" className="p-6 text-center text-slate-400">Keine Treffer.</td></tr>}
         </tbody></table></Card>
-      <p className="text-xs text-slate-400">„Video-Analyse" jetzt manuell (OK/✗) → später automatisch durch die KI-Auswertung; speist die 20 €-Cashback-Freigabe.</p>
+      <p className="text-xs text-slate-400">„Video-Analyse" jetzt manuell (OK/✗) → später automatisch durch die KI-Auswertung; speist die 25 €-Cashback-Freigabe (Video + 5★-Google-Bewertung).</p>
       {idView&&<Modal title={"🪪 Ausweis · "+(idView.name||"")} onClose={()=>setIdView(null)}>
         {idView.urls.length? <div className="space-y-3">{idView.urls.map((u,i)=>(
           <a key={i} href={u} target="_blank" rel="noreferrer"><img src={u} alt={"Ausweis "+(i+1)} className="w-full rounded-lg border border-slate-200"/></a>))}
@@ -944,8 +946,8 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
   if(step===4) return <Shell step={step} footer={<Btn kind="ok" className="flex-1" size="lg" disabled={!agreeVideo||busy} onClick={()=>{if(agreeVideo&&!busy)submit();}}>{busy?"Speichere…":"✓ Check-in abschließen"}</Btn>}>
     <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-2xl p-4">
       <div className="text-sm opacity-90">💶 Cashback</div>
-      <div className="text-lg font-bold mt-1">20 € zurück fürs Auszugs-Video</div>
-      <div className="text-xs opacity-90 mt-2">Film am Check-out-Tag dein Zimmer. Sichtbar sein muss: Zimmer & Bett, Boden, Bad, leerer Kühlschrank, kein Müll, Fenster zu. Bei sauberem Zustand bekommst du 20 € zurück.</div>
+      <div className="text-lg font-bold mt-1">25 € zurück: 5★-Google-Bewertung + Auszugsvideo</div>
+      <div className="text-xs opacity-90 mt-2">Am Check-out-Tag: kurzes 5-Sterne-Google-Review mit Text + Video deines Zimmers (Zimmer & Bett, Boden, Bad, leerer Kühlschrank, kein Müll, Fenster zu). Beides zusammen = 25 € zurück.</div>
     </div>
     <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={agreeVideo} onChange={e=>setAgreeVideo(e.target.checked)} className="w-4 h-4"/> Ich nehme beim Auszug ein kurzes Video auf.</label>
   </Shell>;
@@ -981,7 +983,7 @@ function Guest({onAdmin,initialCode}) {
   const [issue,setIssue]=useState({category:"",message:""}); const [issueSent,setIssueSent]=useState(false);
   const [inbox,setInbox]=useState(null); const [gmsg,setGmsg]=useState("");
   const [pop,setPop]=useState("save"); const [ciPersons,setCiPersons]=useState([]);
-  useEffect(()=>{ if(booking?.code) sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})).catch(()=>setInbox({messages:[],infos:[]})); },[booking]);
+  useEffect(()=>{ if(!booking?.code)return; const load=()=>sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})).catch(()=>setInbox({messages:[],infos:[]})); load(); const id=setInterval(load,15000); return ()=>clearInterval(id); },[booking]);
   useEffect(()=>{ if(booking?.id&&checkedIn) sb.from("check_ins").select("full_name").eq("reservation_id",booking.id).then(({data})=>setCiPersons((data||[]).map(x=>x.full_name).filter(Boolean))); },[booking,checkedIn]);
   const sendG=async()=>{ if(!gmsg.trim()||!booking?.code)return; const {error}=await sb.rpc("mz_guest_send",{p_code:booking.code,p_body:gmsg.trim()}); if(error)return err(error); setGmsg(""); sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})); };
   const reqG=async(type,body)=>{ if(!booking?.code)return; const {error}=await sb.rpc("mz_guest_request",{p_code:booking.code,p_type:type,p_body:body}); if(error)return err(error); toast("Antrag gesendet – wir melden uns."); sb.rpc("mz_guest_inbox",{p_code:booking.code}).then(({data})=>setInbox(data||{messages:[],infos:[]})); };
@@ -1022,6 +1024,8 @@ function Guest({onAdmin,initialCode}) {
   const daysToCo= co? Math.round((co-today0)/86400000) : 99;
   let phaseIdx=2; if(daysToCo<=3&&daysToCo>=0)phaseIdx=3; if(daysToCo<0)phaseIdx=4;
   const PHASES=[L("Buchung","Booking"),L("Check-in","Check-in"),L("Aufenthalt","Stay"),L("Check-out / Verl.","Check-out / Ext."),L("Auszug","Move-out")];
+  const fmtD=(d)=>{try{return d?new Date(d).toLocaleDateString("de-DE",{day:"2-digit",month:"2-digit"}):"";}catch(e){return"";}};
+  const SUB=[fmtD(booking.created_at),fmtD(booking.check_in_date),fmtD(today0),fmtD(booking.check_out_date),fmtD(booking.check_out_date)];
   const checklist=[L("Jedes Zimmer & Bett","Each room & bed"),L("Boden & Bad","Floor & bath"),L("Kühlschrank leer","Fridge empty"),L("Kein Müll","No trash"),L("Fenster geschlossen","Windows closed")];
   const wgbReq=()=>{ const who=ciPersons.length?(" für: "+ciPersons.join(", ")):""; reqG("wgb_request","Wohnungsgeberbescheinigung beantragt"+who); };
   const shareLink=()=>{ const u=window.location.href; if(navigator.share){navigator.share({title:"JJ Real Estate Check-in",url:u}).catch(()=>{});} else if(navigator.clipboard){navigator.clipboard.writeText(u).then(()=>toast(L("Link kopiert","Link copied")),()=>window.prompt("Link",u));} else window.prompt("Link",u); };
@@ -1033,16 +1037,22 @@ function Guest({onAdmin,initialCode}) {
     setPhase("done"); toast(L("Video hochgeladen – danke!","Video uploaded – thank you!"));
   }catch(e){ setPhase("idle"); err(e); } };
   const checkoutBlock=(<div>
-    {phase==="idle"&&<label className="block w-full bg-white text-emerald-700 rounded-xl py-3 font-bold text-center cursor-pointer">🎥 {L("Auszugsvideo hochladen (20 € zurück)","Upload move-out video (20 € back)")}<input type="file" accept="video/*" capture="environment" className="hidden" onChange={e=>uploadCheckoutVideo(e.target.files&&e.target.files[0])}/></label>}
+    {phase==="idle"&&<label className="block w-full bg-white text-emerald-700 rounded-xl py-3 font-bold text-center cursor-pointer">🎥 {L("Auszugsvideo hochladen","Upload move-out video")}<input type="file" accept="video/*" capture="environment" className="hidden" onChange={e=>uploadCheckoutVideo(e.target.files&&e.target.files[0])}/></label>}
     {phase==="evaluating"&&<div className="mt-2 flex items-center gap-3 text-white text-sm"><span className="animate-spin inline-block w-5 h-5 border-2 border-white/40 border-t-white rounded-full"></span>{L("Video wird hochgeladen…","Uploading video…")}</div>}
-    {phase==="done"&&<div className="mt-2 bg-white/15 rounded-xl p-3 text-sm text-white">✅ {L("Video hochgeladen! Wir prüfen es – bei sauberem Zustand bekommst du 20 € zurück.","Video uploaded! We review it – 20 € back if everything is clean.")} <button onClick={()=>setPhase("idle")} className="underline">{L("Neues Video","New video")}</button></div>}
+    {phase==="done"&&<div className="mt-2 bg-white/15 rounded-xl p-3 text-sm text-white">✅ {L("Video hochgeladen! Mit 5★-Google-Bewertung gibt's "+CASHBACK_EUR+" € zurück.","Video uploaded! With a 5★ Google review you get "+CASHBACK_EUR+" € back.")} <button onClick={()=>setPhase("idle")} className="underline">{L("Neues Video","New video")}</button></div>}
   </div>);
   const cashbackCard=(<div style={{animation:"mzGlow 1.8s ease-in-out infinite"}} className="bg-gradient-to-br from-emerald-500 via-green-500 to-teal-500 text-white rounded-2xl p-5">
     <div className="text-sm font-semibold opacity-95">💶 {L("Cashback-Aktion","Cashback")}</div>
-    <div className="text-xl font-bold mt-1">{L("Lade beim Auszug ein Video hoch – 20 € zurück, wenn alles sauber ist.","Upload a video at move-out – get 20 € back if everything is clean.")}</div>
-    <div className="text-xs opacity-90 mt-3">{L("Das muss im Video zu sehen sein:","Must be visible in the video:")}</div>
+    <div className="text-2xl font-extrabold mt-1">{CASHBACK_EUR} € {L("zurück","back")}</div>
+    <div className="text-sm font-semibold mt-1">{L("So bekommst du den Cashback – beides nötig:","How to get the cashback – both required:")}</div>
+    <div className="mt-2 space-y-1.5 text-sm">
+      <div className="flex items-start gap-2"><span className="font-bold">1.</span><span>{L("5-Sterne-Google-Bewertung mit kurzem Text","5-star Google review with a short text")}</span></div>
+      <div className="flex items-start gap-2"><span className="font-bold">2.</span><span>{L("Auszugsvideo deines Zimmers (sauber)","Move-out video of your clean room")}</span></div>
+    </div>
+    <a href={GOOGLE_REVIEW_URL} target="_blank" rel="noreferrer" className="mt-3 block text-center bg-yellow-300 text-slate-900 rounded-xl py-3 font-bold">⭐ {L("Jetzt 5★ auf Google bewerten","Leave a 5★ Google review")}</a>
+    <div className="text-xs opacity-90 mt-3">{L("Im Video muss zu sehen sein:","Must be visible in the video:")}</div>
     <div className="flex flex-wrap gap-1.5 mt-1">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
-    <div className="mt-4">{checkoutBlock}</div>
+    <div className="mt-3">{checkoutBlock}</div>
   </div>);
   return (
     <div className="min-h-screen p-3 sm:p-4">
@@ -1056,8 +1066,10 @@ function Guest({onAdmin,initialCode}) {
         <Card className="p-4"><div className="flex items-center">{PHASES.map((p,i)=>(
           <div key={i} className="flex items-center flex-1 last:flex-none">
             <div className="flex flex-col items-center shrink-0">
+              {i===phaseIdx&&<div className="text-[10px] font-bold text-blue-600 mb-0.5">▾ {L("Heute","Today")}</div>}
               <div className={"w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold "+(i<phaseIdx?"bg-emerald-500 text-white":i===phaseIdx?"bg-blue-600 text-white ring-4 ring-blue-200":"bg-slate-200 text-slate-400")}>{i<phaseIdx?"✓":i+1}</div>
               <div className={"text-[10px] mt-1 text-center w-16 leading-tight "+(i===phaseIdx?"text-blue-700 font-semibold":"text-slate-400")}>{p}</div>
+              {SUB[i]&&<div className={"text-[10px] text-center w-16 leading-tight "+(i===phaseIdx?"text-blue-500 font-semibold":"text-slate-400")}>{SUB[i]}</div>}
             </div>
             {i<PHASES.length-1&&<div className={"h-0.5 flex-1 -mt-4 mx-1 "+(i<phaseIdx?"bg-emerald-400":"bg-slate-200")}/>}
           </div>))}</div></Card>
@@ -1081,9 +1093,6 @@ function Guest({onAdmin,initialCode}) {
                   </div>
                 : <p className="text-sm text-slate-400 text-center">{L("Video folgt.","Video coming soon.")}</p>}
             </Card>
-            {hr.length>0&&<Card className="p-5">
-              <h3 className="font-semibold text-slate-800 mb-2">📋 {L("Hausregeln","House rules")}</h3>
-              <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>)}</ol></Card>}
             <Card className="p-5">
               <h3 className="font-semibold text-slate-800 mb-1">📅 {L("Reservierung & Anträge","Reservation & requests")}</h3>
               <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-sm text-blue-800 mb-3">{L("Reserviert","Reserved")} <b>{L("bis","until")} {fmt(booking.check_out_date)}</b>. {L("Check-out & Verlängerung müssen beantragt werden.","Check-out & extension must be requested.")}</div>
@@ -1116,6 +1125,9 @@ function Guest({onAdmin,initialCode}) {
               <div className="flex gap-2 overflow-x-auto pb-1">{room.photos.map((url,i)=>(
                 <a key={i} href={url} target="_blank" rel="noreferrer" className="shrink-0"><img src={url} alt="" className="h-40 rounded-xl object-cover"/></a>))}</div>
             </Card>}
+            {hr.length>0&&<Card className="p-5">
+              <h3 className="font-semibold text-slate-800 mb-2">📋 {L("Hausregeln","House rules")}</h3>
+              <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>)}</ol></Card>}
           </div>
 
           {/* RIGHT: Cashback + Nachrichten */}
@@ -1149,9 +1161,10 @@ function Guest({onAdmin,initialCode}) {
           <Btn kind="soft" onClick={()=>{setPop(null);if(confirm(L("Auschecken zum ","Check out on ")+fmt(booking.check_out_date)+L(" beantragen?","?")))reqG("checkout","Auschecken beantragt (geplant: "+fmt(booking.check_out_date)+")");}}>🧳 {L("Auschecken beantragen","Request check-out")}</Btn>
         </div>
       </Modal>}
-      {pop==="phase"&&phaseIdx===4&&<Modal title={"💶 "+L("Auszug – 20 € Cashback","Move-out – 20 € cashback")} onClose={()=>setPop(null)}>
+      {pop==="phase"&&phaseIdx===4&&<Modal title={"💶 "+L("Auszug – "+CASHBACK_EUR+" € Cashback","Move-out – "+CASHBACK_EUR+" € cashback")} onClose={()=>setPop(null)}>
         <div className="bg-gradient-to-br from-emerald-500 via-green-500 to-teal-500 text-white rounded-2xl p-4">
-          <div className="text-sm font-bold">{L("Lade jetzt dein Auszugsvideo hoch – 20 € zurück, wenn alles sauber ist.","Upload your move-out video now – 20 € back if clean.")}</div>
+          <div className="text-sm font-bold">{L("So gibt's "+CASHBACK_EUR+" € zurück: 5★-Google-Bewertung mit Text + Auszugsvideo.","Get "+CASHBACK_EUR+" € back: 5★ Google review with text + move-out video.")}</div>
+          <a href={GOOGLE_REVIEW_URL} target="_blank" rel="noreferrer" className="mt-2 block text-center bg-yellow-300 text-slate-900 rounded-xl py-2.5 font-bold">⭐ {L("Jetzt 5★ bewerten","Leave a 5★ review")}</a>
           <div className="flex flex-wrap gap-1.5 mt-2">{checklist.map((c,i)=><span key={i} className="bg-white/20 rounded-full px-2.5 py-1 text-xs">✓ {c}</span>)}</div>
           <div className="mt-3">{checkoutBlock}</div>
         </div>
@@ -1398,6 +1411,7 @@ function Gaestekommunikation({bump}){
   const [hThreads,reloadHT]=useList(loaders.houseThreads,[bump]);
   const [hMsgs,reloadHM]=useList(loaders.houseMsgs,[bump]);
   const [objekte]=useList(loaders.objekte,[bump]);
+  useEffect(()=>{ const id=setInterval(()=>{reloadCM();reloadCT();reloadHM();reloadHT();},15000); return ()=>clearInterval(id); },[]);
   if(!companies||!cThreads||!cMsgs||!hThreads||!hMsgs) return <Skeleton/>;
   const reloadAll=()=>{reloadCM();reloadCT();reloadHM();reloadHT();};
   const msgs=mode==="firma"?cMsgs:hMsgs;
@@ -1419,8 +1433,7 @@ function Gaestekommunikation({bump}){
     if(mode==="firma"){ let tid=threadForCompany(sel)?.id; if(!tid){ const {data,error}=await sb.from("company_threads").insert({company_id:sel,last_message_at:new Date().toISOString()}).select("id").single(); if(error)return err(error); tid=data.id; }
       const {error}=await sb.from("messages").insert({thread_id:tid,sender:"team",body:reply.trim(),type:"chat"}); if(error)return err(error);
       await sb.from("company_threads").update({last_message_at:new Date().toISOString()}).eq("id",tid);
-      const co=companies.find(c=>String(c.id)===String(sel));
-      if(co?.email) sendMail("message_notification",co.email,"de",{title:"Neue Nachricht von JJ Real Estate",lead:"Sie haben eine neue Nachricht von JJ Real Estate:",messageBody:reply.trim()});
+      /* E-Mail-Benachrichtigung an die Firma übernimmt der DB-Trigger notify_company_on_team_message (mz-email) – keine Doppel-Mail hier. */
     } else { let tid=threadForHouse(sel)?.id; if(!tid){ const {data,error}=await sb.from("house_threads").insert({objekt_id:sel,last_message_at:new Date().toISOString()}).select("id").single(); if(error)return err(error); tid=data.id; }
       const {error}=await sb.from("house_messages").insert({thread_id:tid,sender:"team",author:"Team",body:reply.trim(),type:"chat"}); if(error)return err(error);
       await sb.from("house_threads").update({last_message_at:new Date().toISOString()}).eq("id",tid); }
