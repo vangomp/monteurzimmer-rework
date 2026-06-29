@@ -1013,12 +1013,17 @@ function Guest({onAdmin,initialCode}) {
   const checklist=[L("Jedes Zimmer & Bett","Each room & bed"),L("Boden & Bad","Floor & bath"),L("Kühlschrank leer","Fridge empty"),L("Kein Müll","No trash"),L("Fenster geschlossen","Windows closed")];
   const wgbReq=()=>{ const who=ciPersons.length?(" für: "+ciPersons.join(", ")):""; reqG("wgb_request","Wohnungsgeberbescheinigung beantragt"+who); };
   const shareLink=()=>{ const u=window.location.href; if(navigator.share){navigator.share({title:"JJ Real Estate Check-in",url:u}).catch(()=>{});} else if(navigator.clipboard){navigator.clipboard.writeText(u).then(()=>toast(L("Link kopiert","Link copied")),()=>window.prompt("Link",u));} else window.prompt("Link",u); };
+  const uploadCheckoutVideo=async(file)=>{ if(!file)return; setPhase("evaluating"); try{
+    const path=`${booking.id}/checkout-${Date.now()}-${(file.name||"video").replace(/[^\w.\-]/g,"_")}`;
+    const up=await sb.storage.from("checkout-videos").upload(path,file,{upsert:true,contentType:file.type||"video/mp4"});
+    if(up.error){ setPhase("idle"); return err(up.error); }
+    await sb.rpc("mz_guest_checkout_video",{p_code:booking.code,p_path:path});
+    setPhase("done"); toast(L("Video hochgeladen – danke!","Video uploaded – thank you!"));
+  }catch(e){ setPhase("idle"); err(e); } };
   const checkoutBlock=(<div>
-    {phase==="idle"&&<button onClick={()=>evaluate(false)} className="w-full bg-white text-emerald-700 rounded-xl py-3 font-bold">🎥 {L("Auszugsvideo hochladen (20 € zurück)","Upload move-out video (20 € back)")}</button>}
-    {phase==="evaluating"&&<div className="mt-2 flex items-center gap-3 text-white text-sm"><span className="animate-spin inline-block w-5 h-5 border-2 border-white/40 border-t-white rounded-full"></span>{L("Auswertung läuft…","Analyzing…")}</div>}
-    {(phase==="review"||phase==="done")&&<div className="mt-3 grid grid-cols-2 gap-1">{ELEMENTS.map((e,i)=>(<div key={i} className={"flex items-center gap-2 text-sm "+(detected[e]?"text-white":"text-amber-100 font-bold")}><span>{detected[e]?"✓":"✗"}</span><span>{e}</span></div>))}</div>}
-    {phase==="review"&&missing.length>0&&<div className="mt-3 bg-white/15 rounded-xl p-3 text-sm text-white">⚠️ {L("Bitte filme noch:","Please also film:")} <b>{missing.join(", ")}</b><button onClick={()=>evaluate(true)} className="w-full mt-2 bg-white text-emerald-700 rounded-xl py-2 font-semibold">🎥 {missing[0]}</button></div>}
-    {phase==="done"&&<div className="mt-3 bg-white/15 rounded-xl p-3 text-sm text-white">✅ {L("Alle Elemente erkannt! Wird geprüft – bei sauberem Zustand 20 € zurück.","All detected! Under review – 20 € back if clean.")}</div>}
+    {phase==="idle"&&<label className="block w-full bg-white text-emerald-700 rounded-xl py-3 font-bold text-center cursor-pointer">🎥 {L("Auszugsvideo hochladen (20 € zurück)","Upload move-out video (20 € back)")}<input type="file" accept="video/*" capture="environment" className="hidden" onChange={e=>uploadCheckoutVideo(e.target.files&&e.target.files[0])}/></label>}
+    {phase==="evaluating"&&<div className="mt-2 flex items-center gap-3 text-white text-sm"><span className="animate-spin inline-block w-5 h-5 border-2 border-white/40 border-t-white rounded-full"></span>{L("Video wird hochgeladen…","Uploading video…")}</div>}
+    {phase==="done"&&<div className="mt-2 bg-white/15 rounded-xl p-3 text-sm text-white">✅ {L("Video hochgeladen! Wir prüfen es – bei sauberem Zustand bekommst du 20 € zurück.","Video uploaded! We review it – 20 € back if everything is clean.")} <button onClick={()=>setPhase("idle")} className="underline">{L("Neues Video","New video")}</button></div>}
   </div>);
   const cashbackCard=(<div style={{animation:"mzGlow 1.8s ease-in-out infinite"}} className="bg-gradient-to-br from-emerald-500 via-green-500 to-teal-500 text-white rounded-2xl p-5">
     <div className="text-sm font-semibold opacity-95">💶 {L("Cashback-Aktion","Cashback")}</div>
