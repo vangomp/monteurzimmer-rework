@@ -1020,10 +1020,12 @@ function Guest({onAdmin,initialCode}) {
   if(checkedIn===false) return <CheckinWizard booking={booking} room={room} lang={glang} onReset={()=>{setBooking(null);setCode("");setCheckedIn(undefined);}} onDone={()=>setCheckedIn(true)}/>;
   const sendIssue=async()=>{ if(!issue.message.trim())return toast("Bitte Problem beschreiben","err");
     const body=(issue.category?`[${issue.category}] `:"")+issue.message;
+    const haus=room.cleaning_objekte?.code||roomShort(room.room_number)||"";
     sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:issue.category||null,message:issue.message}).then(()=>{},()=>{});
+    sbImmo.rpc("mz_forward_problem",{p_text:body,p_haus:haus,p_code:booking.code,p_gast:booking.guest_name||""}).then(()=>{},()=>{});
     const {error}=await sb.rpc("mz_guest_request",{p_code:booking.code,p_type:"problem",p_body:body});
     if(error)return err(error);
-    setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet – wir kümmern uns."); };
+    setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet – an Mihaela weitergeleitet."); };
   const L=(de,en)=> glang==="de"?de:en;
   const today0=new Date(); today0.setHours(0,0,0,0);
   const co=booking.check_out_date?new Date(booking.check_out_date):null;
@@ -1506,7 +1508,7 @@ function Gaestekommunikation({bump}){
               <div key={m.id} className={"rounded-xl border-l-4 px-3 py-2 text-sm "+(prob?"border-rose-600 bg-rose-50":"border-amber-500 bg-amber-50")}>
                 <div className="flex items-center gap-2 mb-0.5 flex-wrap"><span className={"text-[10px] font-bold text-white rounded-full px-2 py-0.5 "+(prob?"bg-rose-600":"bg-amber-500")}>{prob?"🚨 Blockiert":"✅ To-do"}</span><span className={"text-[11px] font-bold "+(prob?"text-rose-700":"text-amber-700")}>{lbl}</span></div>
                 <div className="text-slate-800">{m.body}</div>
-                <div className="text-[10px] mt-1 text-slate-400">{m.author?m.author+" · ":""}{fmt(m.created_at)} · {prob?"🚨 an Mihaela weiterleiten (IMMODAY · Blockiert)":"mit Mihaela/Jarne abstimmen"}</div>
+                <div className="text-[10px] mt-1 text-slate-400">{m.author?m.author+" · ":""}{fmt(m.created_at)} · {prob?"🚨 automatisch an IMMODAY · Mihaela · Blockiert":"mit Mihaela/Jarne abstimmen"}</div>
               </div>);}
             return (
             <div key={m.id} className={"max-w-[80%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"ml-auto bg-blue-600 text-white":"bg-slate-100 text-slate-800")}>
