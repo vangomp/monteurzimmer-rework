@@ -96,6 +96,7 @@ const err=(e)=>{ console.error(e); toast((e&&e.message)||"Fehler","err"); };
 const BUCHUNG_EMAIL="buchung@jjrealestate.de";
 const GOOGLE_REVIEW_URL="https://www.google.com/search?q=JJ+Real+Estate+Monteurzimmer"; // TODO: durch echten Google-Bewertungslink ersetzen
 const CASHBACK_EUR=25;
+const MIHAELA_IMMODAY_ID="8d0bd36b-288f-45cc-b28f-39bf91147f60"; // geiger@jjrealestate.de in IMMODAY
 // Ruft die bestehende send-email Edge-Function auf (Gmail-SMTP). subject wird serverseitig pro Template/Sprache überschrieben.
 async function sendMail(template,to,language,data){
   if(!to) return {skipped:"no recipient"};
@@ -1021,7 +1022,8 @@ function Guest({onAdmin,initialCode}) {
     const body=(issue.category?`[${issue.category}] `:"")+issue.message;
     sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:issue.category||null,message:issue.message}).then(()=>{},()=>{});
     const {error}=await sb.rpc("mz_guest_request",{p_code:booking.code,p_type:"problem",p_body:body});
-    if(error)return err(error); setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet – wir kümmern uns."); };
+    if(error)return err(error);
+    setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet – wir kümmern uns."); };
   const L=(de,en)=> glang==="de"?de:en;
   const today0=new Date(); today0.setHours(0,0,0,0);
   const co=booking.check_out_date?new Date(booking.check_out_date):null;
@@ -1500,12 +1502,12 @@ function Gaestekommunikation({bump}){
           <div className="flex-1 overflow-y-auto p-4 space-y-2">{selMsgs.map(m=>{
             const lbl=({problem:"🛠 Problem",extension:"📅 Verlängerung",checkout:"🧳 Auscheck-Antrag",checkout_video:"🎥 Check-out-Video",wgb_request:"📋 WGB-Antrag",persons_change:"👥 Personenzahl-Änderung",info:"📢 Info"})[m.type]||m.type;
             const todo={extension:1,checkout:1,wgb_request:1,persons_change:1,problem:1}[m.type];
-            if(todo) return (
-              <div key={m.id} className="rounded-xl border-l-4 border-amber-500 bg-amber-50 px-3 py-2 text-sm">
-                <div className="flex items-center gap-2 mb-0.5"><span className="text-[10px] font-bold bg-amber-500 text-white rounded-full px-2 py-0.5">✅ To-do</span><span className="text-[11px] font-bold text-amber-700">{lbl}</span></div>
+            if(todo){ const prob=m.type==="problem"; return (
+              <div key={m.id} className={"rounded-xl border-l-4 px-3 py-2 text-sm "+(prob?"border-rose-600 bg-rose-50":"border-amber-500 bg-amber-50")}>
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap"><span className={"text-[10px] font-bold text-white rounded-full px-2 py-0.5 "+(prob?"bg-rose-600":"bg-amber-500")}>{prob?"🚨 Blockiert":"✅ To-do"}</span><span className={"text-[11px] font-bold "+(prob?"text-rose-700":"text-amber-700")}>{lbl}</span></div>
                 <div className="text-slate-800">{m.body}</div>
-                <div className="text-[10px] mt-1 text-slate-400">{m.author?m.author+" · ":""}{fmt(m.created_at)} · mit Mihaela/Jarne abstimmen</div>
-              </div>);
+                <div className="text-[10px] mt-1 text-slate-400">{m.author?m.author+" · ":""}{fmt(m.created_at)} · {prob?"🚨 an Mihaela weiterleiten (IMMODAY · Blockiert)":"mit Mihaela/Jarne abstimmen"}</div>
+              </div>);}
             return (
             <div key={m.id} className={"max-w-[80%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"ml-auto bg-blue-600 text-white":"bg-slate-100 text-slate-800")}>
               {m.type&&m.type!=="chat"&&<div className={"text-[10px] font-semibold mb-0.5 "+(m.sender==="team"?"text-blue-100":"text-slate-500")}>{lbl}</div>}
