@@ -1017,8 +1017,10 @@ function Guest({onAdmin,initialCode}) {
   if(checkedIn===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Lädt…</div>;
   if(checkedIn===false) return <CheckinWizard booking={booking} room={room} lang={glang} onReset={()=>{setBooking(null);setCode("");setCheckedIn(undefined);}} onDone={()=>setCheckedIn(true)}/>;
   const sendIssue=async()=>{ if(!issue.message.trim())return toast("Bitte Problem beschreiben","err");
-    const {error}=await sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:issue.category||null,message:issue.message});
-    if(error)return err(error); setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet"); };
+    const body=(issue.category?`[${issue.category}] `:"")+issue.message;
+    sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:issue.category||null,message:issue.message}).then(()=>{},()=>{});
+    const {error}=await sb.rpc("mz_guest_request",{p_code:booking.code,p_type:"problem",p_body:body});
+    if(error)return err(error); setIssueSent(true); setIssue({category:"",message:""}); toast("Meldung gesendet – wir kümmern uns."); };
   const L=(de,en)=> glang==="de"?de:en;
   const today0=new Date(); today0.setHours(0,0,0,0);
   const co=booking.check_out_date?new Date(booking.check_out_date):null;
@@ -1064,46 +1066,69 @@ function Guest({onAdmin,initialCode}) {
             <p className="text-xs text-slate-400">{L("Aufenthalt","Stay")}: {fmt(booking.check_in_date)} – {fmt(booking.check_out_date)}</p></div>
           <div className="flex gap-1">{["de","en","cs","sk","ru"].map(l=><button key={l} onClick={()=>setGlang(l)} className={"text-xs px-2 py-1 rounded font-semibold "+(glang===l?"bg-blue-600 text-white":"bg-slate-100 text-slate-500")}>{l.toUpperCase()}</button>)}</div>
         </div>
-        <Card className="p-4"><div className="flex items-center">{PHASES.map((p,i)=>(
-          <div key={i} className="flex items-center flex-1 last:flex-none">
-            <div className="flex flex-col items-center shrink-0">
-              {i===phaseIdx&&<div className="text-[10px] font-bold text-blue-600 mb-0.5">▾ {L("Heute","Today")}</div>}
-              <div className={"w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold "+(i<phaseIdx?"bg-emerald-500 text-white":i===phaseIdx?"bg-blue-600 text-white ring-4 ring-blue-200":"bg-slate-200 text-slate-400")}>{i<phaseIdx?"✓":i+1}</div>
-              <div className={"text-[10px] mt-1 text-center w-16 leading-tight "+(i===phaseIdx?"text-blue-700 font-semibold":"text-slate-400")}>{p}</div>
-              {SUB[i]&&<div className={"text-[10px] text-center w-16 leading-tight "+(i===phaseIdx?"text-blue-500 font-semibold":"text-slate-400")}>{SUB[i]}</div>}
-            </div>
-            {i<PHASES.length-1&&<div className={"h-0.5 flex-1 -mt-4 mx-1 "+(i<phaseIdx?"bg-emerald-400":"bg-slate-200")}/>}
-          </div>))}</div></Card>
-
+        {/* Reihe A: vertikale Zeitleiste + Reservierung/Anträge */}
         <div className="grid lg:grid-cols-2 gap-4 items-start">
-          {/* LEFT: Check-in */}
+          <Card className="p-5">
+            <h3 className="font-semibold text-slate-800 mb-3 text-sm">📍 {L("Dein Ablauf","Your timeline")}</h3>
+            <div>{PHASES.map((p,i)=>(
+              <div key={i} className="flex gap-3">
+                <div className="flex flex-col items-center">
+                  <div className={"w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 "+(i<phaseIdx?"bg-emerald-500 text-white":i===phaseIdx?"bg-blue-600 text-white ring-4 ring-blue-200":"bg-slate-200 text-slate-400")}>{i<phaseIdx?"✓":i+1}</div>
+                  {i<PHASES.length-1&&<div className={"w-0.5 grow min-h-[22px] "+(i<phaseIdx?"bg-emerald-400":"bg-slate-200")}/>}
+                </div>
+                <div className="pb-4">
+                  <div className="flex items-center gap-2"><span className={"text-sm "+(i===phaseIdx?"font-bold text-blue-700":"font-semibold text-slate-700")}>{p}</span>{i===phaseIdx&&<span className="text-[10px] font-bold text-white bg-blue-600 rounded-full px-2 py-0.5">{L("Heute","Today")}</span>}</div>
+                  {SUB[i]&&<div className="text-xs text-slate-400">{SUB[i]}</div>}
+                </div>
+              </div>))}</div>
+          </Card>
+          <Card className="p-5">
+            <h3 className="font-semibold text-slate-800 mb-1">📅 {L("Reservierung & Anträge","Reservation & requests")}</h3>
+            <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-sm text-blue-800 mb-3">{L("Reserviert","Reserved")} <b>{L("bis","until")} {fmt(booking.check_out_date)}</b>. {L("Check-out & Verlängerung müssen beantragt werden.","Check-out & extension must be requested.")}</div>
+            <div className="grid grid-cols-1 gap-2">
+              <button onClick={reqVerlaengern} className="w-full border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">📅 {L("Verlängerung beantragen","Request extension")}</button>
+              <button onClick={()=>{if(confirm(L("Auschecken zum ","Check out on ")+fmt(booking.check_out_date)+L(" beantragen?","?")))reqG("checkout","Auschecken beantragt (geplant: "+fmt(booking.check_out_date)+")");}} className="w-full border border-slate-300 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">🧳 {L("Auschecken beantragen","Request check-out")}</button>
+              <button onClick={wgbReq} className="w-full border border-slate-300 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">📋 {L("Wohnungsgeberbescheinigung beantragen","Request residence confirmation")}</button>
+              {ciPersons.length>0&&<p className="text-[11px] text-slate-400">{L("Wird für deine Check-in-Personen erstellt:","Issued for your checked-in persons:")} {ciPersons.join(", ")}</p>}
+            </div>
+          </Card>
+        </div>
+
+        {/* Reihe B: Dein Check-in + Cashback */}
+        <div className="grid lg:grid-cols-2 gap-4 items-start">
+          <Card className="p-5">
+            <h3 className="font-semibold text-slate-800 mb-2">🔑 {L("Dein Check-in","Your check-in")}</h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("Haustür-Code","House door code")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
+              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("Zimmer-Code","Room code")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
+              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
+              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("WLAN-Passwort","WiFi password")}</div><div className="font-mono text-slate-800 break-all">{room.wifi_password||"—"}</div></div>
+            </div>
+            <div className="flex flex-col items-center my-1"><div className="w-px h-5 border-l-2 border-dashed border-slate-300"></div><div className="text-[11px] text-slate-400">↓ {L("So findest du dein Zimmer","How to find your room")}</div></div>
+            {(room.intro_video_url||room.youtube_door_link)
+              ? <div className="space-y-2">
+                  {room.intro_video_url&&<a href={room.intro_video_url} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">▶ {L("Check-in & Lage des Zimmers","Check-in & room location")}</a>}
+                  {room.youtube_door_link&&<a href={room.youtube_door_link} target="_blank" rel="noreferrer" className="block text-center bg-slate-700 text-white rounded-xl py-3 text-sm font-semibold">▶ {L("Tür- & Wegbeschreibung","Door & directions")}</a>}
+                </div>
+              : <p className="text-sm text-slate-400 text-center">{L("Video folgt.","Video coming soon.")}</p>}
+          </Card>
+          {cashbackCard}
+        </div>
+
+        {/* Reihe C: Nachrichten + (App speichern / Problem) */}
+        <div className="grid lg:grid-cols-2 gap-4 items-start">
+          <Card className="p-5">
+            <h3 className="font-semibold text-slate-800 mb-2">💬 {L("Infos & Nachrichten","Info & messages")}</h3>
+            {Array.isArray(inbox?.infos)&&inbox.infos.length>0&&<div className="space-y-2 mb-3">{inbox.infos.map(i=>(
+              <div key={i.id} className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">📢 {i.body}</div>))}</div>}
+            <div className="space-y-2 max-h-72 overflow-y-auto mb-3">{(inbox?.messages||[]).map(m=>(
+              <div key={m.id} className={"max-w-[85%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-slate-100 text-slate-800":"ml-auto bg-blue-600 text-white")}>{m.body}</div>))}
+              {inbox&&!inbox.messages?.length&&<p className="text-sm text-slate-400">{L("Noch keine Nachrichten – schreib uns bei Fragen oder Problemen.","No messages yet – write us anytime.")}</p>}
+              {!inbox&&<p className="text-sm text-slate-400">{L("Lädt…","Loading…")}</p>}
+            </div>
+            <div className="flex gap-2"><input value={gmsg} onChange={e=>setGmsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendG()} placeholder={L("Nachricht an das Team…","Message to the team…")} className={inputCls}/><Btn onClick={sendG}>{L("Senden","Send")}</Btn></div>
+          </Card>
           <div className="space-y-4">
-            <Card className="p-5">
-              <h3 className="font-semibold text-slate-800 mb-2">🔑 {L("Dein Check-in","Your check-in")}</h3>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("Haustür-Code","House door code")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
-                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("Zimmer-Code","Room code")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
-                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
-                <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("WLAN-Passwort","WiFi password")}</div><div className="font-mono text-slate-800 break-all">{room.wifi_password||"—"}</div></div>
-              </div>
-              <div className="flex flex-col items-center my-1"><div className="w-px h-5 border-l-2 border-dashed border-slate-300"></div><div className="text-[11px] text-slate-400">↓ {L("So findest du dein Zimmer","How to find your room")}</div></div>
-              {(room.intro_video_url||room.youtube_door_link)
-                ? <div className="space-y-2">
-                    {room.intro_video_url&&<a href={room.intro_video_url} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">▶ {L("Check-in & Lage des Zimmers","Check-in & room location")}</a>}
-                    {room.youtube_door_link&&<a href={room.youtube_door_link} target="_blank" rel="noreferrer" className="block text-center bg-slate-700 text-white rounded-xl py-3 text-sm font-semibold">▶ {L("Tür- & Wegbeschreibung","Door & directions")}</a>}
-                  </div>
-                : <p className="text-sm text-slate-400 text-center">{L("Video folgt.","Video coming soon.")}</p>}
-            </Card>
-            <Card className="p-5">
-              <h3 className="font-semibold text-slate-800 mb-1">📅 {L("Reservierung & Anträge","Reservation & requests")}</h3>
-              <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-sm text-blue-800 mb-3">{L("Reserviert","Reserved")} <b>{L("bis","until")} {fmt(booking.check_out_date)}</b>. {L("Check-out & Verlängerung müssen beantragt werden.","Check-out & extension must be requested.")}</div>
-              <div className="grid grid-cols-1 gap-2">
-                <button onClick={reqVerlaengern} className="w-full border border-blue-600 text-blue-700 rounded-xl py-2.5 text-sm font-semibold">📅 {L("Verlängerung beantragen","Request extension")}</button>
-                <button onClick={()=>{if(confirm(L("Auschecken zum ","Check out on ")+fmt(booking.check_out_date)+L(" beantragen?","?")))reqG("checkout","Auschecken beantragt (geplant: "+fmt(booking.check_out_date)+")");}} className="w-full border border-slate-300 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">🧳 {L("Auschecken beantragen","Request check-out")}</button>
-                <button onClick={wgbReq} className="w-full border border-slate-300 text-slate-700 rounded-xl py-2.5 text-sm font-semibold">📋 {L("Wohnungsgeberbescheinigung beantragen","Request residence confirmation")}</button>
-                {ciPersons.length>0&&<p className="text-[11px] text-slate-400">{L("Wird für deine Check-in-Personen erstellt:","Issued for your checked-in persons:")} {ciPersons.join(", ")}</p>}
-              </div>
-            </Card>
             <Card className="p-5 text-center">
               <h3 className="font-semibold text-slate-800 mb-1">📲 {L("App speichern / Kanal teilen","Save app / share")}</h3>
               <p className="text-xs text-slate-400 mb-3">{L("Scannen oder 'Zum Home-Bildschirm hinzufügen' – und an Kollegen teilen.","Scan or 'Add to Home Screen' – and share with colleagues.")}</p>
@@ -1126,27 +1151,11 @@ function Guest({onAdmin,initialCode}) {
               <div className="flex gap-2 overflow-x-auto pb-1">{room.photos.map((url,i)=>(
                 <a key={i} href={url} target="_blank" rel="noreferrer" className="shrink-0"><img src={url} alt="" className="h-40 rounded-xl object-cover"/></a>))}</div>
             </Card>}
-            {hr.length>0&&<Card className="p-5">
-              <h3 className="font-semibold text-slate-800 mb-2">📋 {L("Hausregeln","House rules")}</h3>
-              <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>)}</ol></Card>}
-          </div>
-
-          {/* RIGHT: Cashback + Nachrichten */}
-          <div className="space-y-4">
-            {cashbackCard}
-            <Card className="p-5">
-              <h3 className="font-semibold text-slate-800 mb-2">💬 {L("Infos & Nachrichten","Info & messages")}</h3>
-              {Array.isArray(inbox?.infos)&&inbox.infos.length>0&&<div className="space-y-2 mb-3">{inbox.infos.map(i=>(
-                <div key={i.id} className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-800">📢 {i.body}</div>))}</div>}
-              <div className="space-y-2 max-h-72 overflow-y-auto mb-3">{(inbox?.messages||[]).map(m=>(
-                <div key={m.id} className={"max-w-[85%] rounded-2xl px-3 py-2 text-sm "+(m.sender==="team"?"bg-slate-100 text-slate-800":"ml-auto bg-blue-600 text-white")}>{m.body}</div>))}
-                {inbox&&!inbox.messages?.length&&<p className="text-sm text-slate-400">{L("Noch keine Nachrichten – schreib uns bei Fragen oder Problemen.","No messages yet – write us anytime.")}</p>}
-                {!inbox&&<p className="text-sm text-slate-400">{L("Lädt…","Loading…")}</p>}
-              </div>
-              <div className="flex gap-2"><input value={gmsg} onChange={e=>setGmsg(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendG()} placeholder={L("Nachricht an das Team…","Message to the team…")} className={inputCls}/><Btn onClick={sendG}>{L("Senden","Send")}</Btn></div>
-            </Card>
           </div>
         </div>
+        {hr.length>0&&<Card className="p-5">
+          <h3 className="font-semibold text-slate-800 mb-2">📋 {L("Hausregeln","House rules")}</h3>
+          <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600">{hr.map((r,i)=><li key={i}>{typeof r==="string"?r:(r[glang]||r.de||r.en||"")}</li>)}</ol></Card>}
         <button onClick={()=>{setBooking(null);setCode("");setCheckedIn(undefined);setPhase("idle");setDetected({});}} className="text-xs text-slate-400 w-full text-center">← {L("anderer Code","other code")}</button>
       </div>
 
