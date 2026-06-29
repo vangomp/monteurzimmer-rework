@@ -849,7 +849,7 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
   const upP=(i,k,v)=>setPeople(ps=>ps.map((p,j)=>j===i?{...p,[k]:v}:p));
   const idsComplete=people.length===persons && people.every(p=>p.front&&p.back);
   const STEPS=["Sprache","Personen & Daten","Ausweise","Hausordnung","Cashback","Fertig"];
-  const canNext=()=>{ if(step===0)return true; if(step===1)return persons>=1&&persons<=cap&&people.every(p=>p.name.trim())&&people[0].email.trim(); if(step===2)return idsComplete; if(step===3)return agreeRules; if(step===4)return agreeVideo; return true; };
+  const canNext=()=>{ if(step===0)return true; if(step===1)return people.length>0&&people.every(p=>p.name.trim())&&people[0].email.trim(); if(step===2)return idsComplete; if(step===3)return agreeRules; if(step===4)return agreeVideo; return true; };
   const submit=async()=>{ setBusy(true);
     try{ const sizes=people.map(p=>p.front&&p.front.size).filter(Boolean); const dup=sizes.length!==new Set(sizes).size; const stamp=Date.now();
       for(let i=0;i<people.length;i++){ const p=people[i];
@@ -889,19 +889,13 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
   </Shell>;
 
   if(step===1) return <Shell step={step} footer={<Btn className="flex-1" size="lg" disabled={!canNext()} onClick={()=>canNext()&&setStep(2)}>Weiter →</Btn>}>
-    <div><div className="text-sm font-semibold text-slate-700 mb-1">Wie viele Personen schlafen im Zimmer?</div>
-      <div className="text-xs text-slate-400 mb-2">Max. {cap} (Kapazität dieses Zimmers). Für jede Person wird ein Ausweis benötigt.</div>
-      <div className="flex flex-wrap gap-2">{Array.from({length:cap},(_,i)=>i+1).map(n=>(
-        <button key={n} onClick={()=>setPersons(n)} className={"w-11 h-11 rounded-xl font-bold border-2 "+(persons===n?"border-blue-600 bg-blue-600 text-white":"border-slate-200 text-slate-600")}>{n}</button>))}</div></div>
+    <div className="rounded-xl bg-blue-50 border border-blue-100 p-3 text-sm text-blue-800">Diese Buchung ist für <b>{persons} Person{persons>1?"en":""}</b>. Bitte für jede Person die Daten ausfüllen – pro Person wird ein Ausweis benötigt.</div>
     {people.map((p,i)=>(<div key={i} className="rounded-xl border border-slate-200 p-3 space-y-2">
       <div className="text-xs font-bold text-slate-500 uppercase">Person {i+1}{i===0?" (Hauptkontakt)":""}</div>
       <input className={inputCls} placeholder="Vollständiger Name (wie im Ausweis)" value={p.name} onChange={e=>upP(i,"name",e.target.value)}/>
       {i===0&&<><input className={inputCls} placeholder="E-Mail" value={p.email} onChange={e=>upP(i,"email",e.target.value)}/>
         <input className={inputCls} placeholder="Telefon" value={p.phone} onChange={e=>upP(i,"phone",e.target.value)}/></>}
-      <div className="grid grid-cols-2 gap-2">
-        <input className={inputCls} type="date" value={p.birth_date} onChange={e=>upP(i,"birth_date",e.target.value)} title="Geburtsdatum"/>
-        <input className={inputCls} placeholder="Geburtsort" value={p.birth_place} onChange={e=>upP(i,"birth_place",e.target.value)}/>
-      </div></div>))}
+    </div>))}
   </Shell>;
 
   if(step===2) return <Shell step={step} footer={<Btn className="flex-1" size="lg" disabled={!idsComplete} onClick={()=>idsComplete&&setStep(3)}>Weiter →</Btn>}>
