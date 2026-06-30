@@ -711,15 +711,20 @@ function ReportDetail({report,onClose}){
     setD({items:it.data||[],photos:ph.data||[]});
   })(); },[report.id]);
   const parsePhotos=(v)=>{ if(!v)return []; try{const a=JSON.parse(v);return Array.isArray(a)?a:[];}catch(e){return /^https?:/.test(v)?[v]:[];} };
+  const isVid=(u)=>/\.(mp4|mov|webm|m4v|ogg|3gp)(\?|$)/i.test(u||"");
   const ms=Array.isArray(report.missing_supplies)?report.missing_supplies:[];
+  const totalExtra=d?(d.items||[]).reduce((a,it)=>a+(it.extra_minutes||0),0):0;
   return (<Modal title={"🧹 Report · "+(report.cleaning_objekte?.code||report.cleaner_name||"")} onClose={onClose}>
     <div className="text-sm text-slate-500 mb-3">{report.cleaner_name||"—"} · {fmt(report.submitted_at)}{report.status?` · ${report.status}`:""}</div>
     {!d?<div className="text-slate-400 text-sm">Lädt…</div>:<div className="space-y-3 max-h-[60vh] overflow-y-auto">
-      {d.items.map(it=>{ const ph=parsePhotos(it.video_url); return (
+      {totalExtra>0&&<div className="text-sm bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-amber-800 font-semibold">⏱ Mehraufwand gesamt: {totalExtra} Min.</div>}
+      {d.items.map(it=>{ const media=parsePhotos(it.video_url); return (
         <div key={it.id} className="border border-slate-200 rounded-xl p-3">
-          <div className="flex items-center justify-between gap-2"><span className="font-medium text-slate-700 text-sm">{it.item_label}</span>{it.rating?<Pill text={`${it.rating}/5`} cls={it.rating>=3?"bg-rose-100 text-rose-700":"bg-emerald-100 text-emerald-700"}/>:null}</div>
+          <div className="flex items-center justify-between gap-2"><span className="font-medium text-slate-700 text-sm">{it.item_label}</span><span className="flex items-center gap-1">{it.extra_minutes>0?<Pill text={`+${it.extra_minutes} Min`} cls="bg-amber-100 text-amber-700"/>:null}{it.rating?<Pill text={`${it.rating}/5`} cls={it.rating>=3?"bg-rose-100 text-rose-700":"bg-emerald-100 text-emerald-700"}/>:null}</span></div>
           {it.comment&&<div className="text-xs text-slate-500 mt-1">{it.comment}</div>}
-          {ph.length>0&&<div className="flex flex-wrap gap-2 mt-2">{ph.map((u,k)=><a key={k} href={u} target="_blank" rel="noreferrer"><img src={u} alt="" className="w-16 h-16 object-cover rounded-lg border border-slate-200"/></a>)}</div>}
+          {media.length>0&&<div className="flex flex-wrap gap-2 mt-2">{media.map((u,k)=> isVid(u)
+            ? <video key={k} src={u} controls className="w-28 h-20 rounded-lg border border-slate-200 bg-black"/>
+            : <a key={k} href={u} target="_blank" rel="noreferrer"><img src={u} alt="" className="w-16 h-16 object-cover rounded-lg border border-slate-200"/></a>)}</div>}
         </div>); })}
       {!d.items.length&&<div className="text-sm text-slate-400">Keine Positionen erfasst.</div>}
       {report.checklist_completed&&Object.keys(report.checklist_completed).length>0&&<div className="border border-slate-200 rounded-xl p-3">
@@ -741,19 +746,24 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
   const [picked,setPicked]=useState({}); // item_id -> item_label
   const [bis,setBis]=useState(()=>{ const d=new Date(Date.now()+86400000); d.setHours(12,0,0,0); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); });
   const [komm,setKomm]=useState("");
+  const [inclChk,setInclChk]=useState(true); const [chkPick,setChkPick]=useState({});
   const [busy,setBusy]=useState(false);
   const [created,setCreated]=useState(null); // token after success
   const obj=objekte.find(o=>o.id===objId);
   const objRooms=rooms.filter(r=>r.objekt_id===objId);
   const areas=Array.isArray(obj?.inspection_items)?obj.inspection_items:[];
+  const houseChk=(Array.isArray(obj?.cleaning_checklist)?obj.cleaning_checklist:[]).map(x=>typeof x==="string"?{label:x,required:false}:{label:x.label||"",required:!!x.required});
+  const chkIncluded=(label)=>chkPick[label]!==false;
+  const toggleChk=(label)=>setChkPick(p=>({...p,[label]:p[label]===false?true:false}));
   const toggle=(id,label)=>setPicked(p=>{ const n={...p}; if(n[id])delete n[id]; else n[id]=label; return n; });
   const items=Object.entries(picked).map(([item_id,item_label])=>({item_id,item_label}));
   const create=async()=>{
     if(!objId)return toast("Bitte Haus wählen","err");
     if(!items.length)return toast("Bitte mind. ein Zimmer/Bereich wählen","err");
     if(!bis)return toast("Bitte Termin wählen","err");
+    const checklist=inclChk?houseChk.filter(c=>chkIncluded(c.label)).map(c=>({label:c.label,required:c.required})):[];
     setBusy(true);
-    try{ const {data,error}=await sb.functions.invoke("create-cleaning-order",{body:{objekt_id:objId,items_to_clean:items,zu_reinigen_bis:new Date(bis).toISOString(),kommentar:komm||null}});
+    try{ const {data,error}=await sb.functions.invoke("create-cleaning-order",{body:{objekt_id:objId,items_to_clean:items,zu_reinigen_bis:new Date(bis).toISOString(),kommentar:komm||null,cleaning_checklist:checklist}});
       if(error)throw error; if(data?.error)throw new Error(data.error);
       setCreated(data.token); onCreated&&onCreated(); toast("Auftrag angelegt");
     }catch(e){ err(e); } setBusy(false);
@@ -767,7 +777,7 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
       <div className="mt-4 flex justify-end"><Btn kind="ok" onClick={onClose}>Fertig</Btn></div>
     </Modal>); }
   return (<Modal title="🧹 Reinigungsauftrag anlegen" onClose={onClose}>
-    <Field label="Haus"><select className={inputCls} value={objId} onChange={e=>{setObjId(e.target.value);setPicked({});}}>
+    <Field label="Haus"><select className={inputCls} value={objId} onChange={e=>{setObjId(e.target.value);setPicked({});setChkPick({});setInclChk(true);}}>
       <option value="">— wählen —</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code}{o.name?` · ${o.name}`:""}</option>)}</select></Field>
     {objId&&<div className="mt-2">
       <div className="text-xs font-semibold text-slate-500 uppercase mb-1">Zimmer</div>
@@ -783,6 +793,15 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
           <label key={a.id} className={"flex items-center gap-2 text-sm px-2 py-1 rounded cursor-pointer "+(on?"bg-blue-50":"")}>
             <input type="checkbox" checked={on} onChange={()=>toggle(a.id,a.label)}/> <span className="text-slate-700">{a.label}</span></label>); })}
       </div></>}
+      <div className="mt-3">
+        <label className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-slate-500 uppercase">Allgemeine Checkliste</span>
+          <span className="flex items-center gap-1 text-xs text-slate-500 font-normal normal-case"><input type="checkbox" checked={inclChk} onChange={e=>setInclChk(e.target.checked)}/> einbeziehen</span></label>
+        {inclChk?(houseChk.length>0?<div className="space-y-1 border border-slate-100 rounded-lg p-2 mt-1">
+          {houseChk.map((c,k)=>(<label key={k} className={"flex items-center gap-2 text-sm px-2 py-1 rounded cursor-pointer "+(chkIncluded(c.label)?"":"opacity-50")}>
+            <input type="checkbox" checked={chkIncluded(c.label)} onChange={()=>toggleChk(c.label)}/> <span className="text-slate-700">{c.label}</span>{c.required&&<span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold">Pflicht</span>}</label>))}
+        </div>:<p className="text-xs text-slate-400 mt-1">Für dieses Haus ist keine Checkliste hinterlegt (in „Häuser verwalten" pflegbar).</p>)
+        :<p className="text-xs text-slate-400 mt-1">Minimalauftrag – keine Checkliste für die Reinigungskraft.</p>}
+      </div>
       <div className="grid sm:grid-cols-2 gap-3 mt-3">
         <Field label="Zu reinigen bis"><input type="datetime-local" className={inputCls} value={bis} onChange={e=>setBis(e.target.value)}/></Field>
         <Field label="Kommentar (optional)"><input className={inputCls} value={komm} onChange={e=>setKomm(e.target.value)} placeholder="z.B. Bettwäsche wechseln"/></Field>
@@ -794,16 +813,17 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
 }
 function HouseForm({rec,onSave,onClose}){
   const slug=(s)=>String(s||"").toLowerCase().trim().replace(/\s+/g,"-").replace(/[^\w\-äöüß.]/g,"")||("b-"+Math.random().toString(36).slice(2,6));
-  const [f,setF]=useState({code:rec?.code||"",name:rec?.name||"",address:rec?.address||"",wifi_ssid:rec?.wifi_ssid||"",wifi_password:rec?.wifi_password||"",description:rec?.description||"",google_review_url:rec?.google_review_url||"",inspection_items:Array.isArray(rec?.inspection_items)?rec.inspection_items:[],cleaning_checklist:Array.isArray(rec?.cleaning_checklist)?rec.cleaning_checklist:[]});
+  const [f,setF]=useState({code:rec?.code||"",name:rec?.name||"",address:rec?.address||"",wifi_ssid:rec?.wifi_ssid||"",wifi_password:rec?.wifi_password||"",description:rec?.description||"",google_review_url:rec?.google_review_url||"",inspection_items:Array.isArray(rec?.inspection_items)?rec.inspection_items:[],cleaning_checklist:(Array.isArray(rec?.cleaning_checklist)?rec.cleaning_checklist:[]).map(x=>typeof x==="string"?{label:x,required:false}:{label:x.label||"",required:!!x.required})});
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
   const setArea=(i,label)=>setF(s=>({...s,inspection_items:s.inspection_items.map((a,j)=>j===i?{...a,label}:a)}));
   const addArea=()=>setF(s=>({...s,inspection_items:[...s.inspection_items,{id:"b-"+Math.random().toString(36).slice(2,7),label:""}]}));
   const delArea=(i)=>setF(s=>({...s,inspection_items:s.inspection_items.filter((_,j)=>j!==i)}));
-  const setChk=(i,v)=>setF(s=>({...s,cleaning_checklist:s.cleaning_checklist.map((x,j)=>j===i?v:x)}));
-  const addChk=()=>setF(s=>({...s,cleaning_checklist:[...s.cleaning_checklist,""]}));
+  const setChk=(i,v)=>setF(s=>({...s,cleaning_checklist:s.cleaning_checklist.map((x,j)=>j===i?{...x,label:v}:x)}));
+  const setChkReq=(i)=>setF(s=>({...s,cleaning_checklist:s.cleaning_checklist.map((x,j)=>j===i?{...x,required:!x.required}:x)}));
+  const addChk=()=>setF(s=>({...s,cleaning_checklist:[...s.cleaning_checklist,{label:"",required:false}]}));
   const delChk=(i)=>setF(s=>({...s,cleaning_checklist:s.cleaning_checklist.filter((_,j)=>j!==i)}));
   const save=()=>{ if(!f.code)return toast("Code nötig","err");
-    onSave({...f, inspection_items:f.inspection_items.filter(a=>(a.label||"").trim()).map(a=>({id:a.id||slug(a.label),label:a.label.trim()})), cleaning_checklist:f.cleaning_checklist.map(x=>String(x||"").trim()).filter(Boolean)}); };
+    onSave({...f, inspection_items:f.inspection_items.filter(a=>(a.label||"").trim()).map(a=>({id:a.id||slug(a.label),label:a.label.trim()})), cleaning_checklist:f.cleaning_checklist.map(x=>({label:String(x.label||"").trim(),required:!!x.required})).filter(x=>x.label)}); };
   return (<Modal title={rec?`Haus ${rec.code}`:"Neues Haus"} onClose={onClose}>
     <div className="grid grid-cols-2 gap-3">
       <Field label="Code"><input className={inputCls} value={f.code} onChange={e=>u("code",e.target.value)} placeholder="z.B. GS6"/></Field>
@@ -824,8 +844,11 @@ function HouseForm({rec,onSave,onClose}){
     </div>
     <div className="mt-3 border-t border-slate-100 pt-3">
       <div className="flex items-center justify-between mb-1"><label className="text-xs font-semibold text-slate-600 uppercase">Reinigungs-Checkliste (inkl. Nuki-Akku)</label><button type="button" onClick={addChk} className="text-xs text-blue-600 font-semibold">+ Punkt</button></div>
+      <p className="text-[11px] text-slate-400 mb-1">„Pflicht" = die Reinigungskraft muss den Punkt abhaken, bevor sie absenden kann.</p>
       <div className="space-y-1">{f.cleaning_checklist.map((x,i)=>(
-        <div key={i} className="flex gap-2"><input className={inputCls+" text-sm"} value={x} onChange={e=>setChk(i,e.target.value)} placeholder="z.B. Nuki-Akku tauschen: Smart Lock House"/><button type="button" onClick={()=>delChk(i)} className="text-rose-600 px-2">🗑</button></div>))}
+        <div key={i} className="flex gap-2 items-center"><input className={inputCls+" text-sm"} value={x.label} onChange={e=>setChk(i,e.target.value)} placeholder="z.B. Nuki-Akku tauschen: Smart Lock House"/>
+          <label className="flex items-center gap-1 text-[11px] text-slate-500 whitespace-nowrap cursor-pointer"><input type="checkbox" checked={x.required} onChange={()=>setChkReq(i)}/> Pflicht</label>
+          <button type="button" onClick={()=>delChk(i)} className="text-rose-600 px-1">🗑</button></div>))}
         {!f.cleaning_checklist.length&&<div className="text-xs text-slate-400">Keine Checkliste – z.B. Fenster zu, Licht aus, Müll raus, Nuki-Akku tauschen.</div>}</div>
     </div>
     <div className="flex justify-end gap-2 mt-3"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn><Btn kind="ok" onClick={save}>Speichern</Btn></div>
@@ -1953,16 +1976,17 @@ function CleanerOrder({token}){
   const [name,setName]=useState("");
   const [items,setItems]=useState([]);
   const [dmg,setDmg]=useState(false); const [dmgDesc,setDmgDesc]=useState(""); const [dmgPhotos,setDmgPhotos]=useState([]);
-  const [gc,setGc]=useState(""); const [checks,setChecks]=useState({}); const [missing,setMissing]=useState(""); const [sig,setSig]=useState(null);
+  const [gc,setGc]=useState(""); const [checks,setChecks]=useState({}); const [chkList,setChkList]=useState([]); const [missing,setMissing]=useState(""); const [sig,setSig]=useState(null);
   const [busy,setBusy]=useState(false); const [done,setDone]=useState(false); const [upBusy,setUpBusy]=useState(false);
   const startRef=React.useRef(new Date().toISOString());
   useEffect(()=>{ (async()=>{
     try{ const r=await fetch(SUPABASE_URL+"/functions/v1/get-cleaning-order-by-token?token="+encodeURIComponent(token),{headers:{apikey:SUPABASE_KEY,Authorization:"Bearer "+SUPABASE_KEY}});
       const j=await r.json(); if(!r.ok||!j.success)throw new Error(j.error||"not found");
-      const its=(j.report?.cleaning_report_items||[]).map(it=>({item_id:it.item_id,item_label:it.item_label,rating:it.rating||1,comment:it.comment||"",photos:[]}));
-      if(!its.length&&Array.isArray(j.order?.items_to_clean)) setItems(j.order.items_to_clean.map(it=>({item_id:it.item_id,item_label:it.item_label,rating:1,comment:"",photos:[]}))); else setItems(its);
-      const cl=Array.isArray(j.objekt?.cleaning_checklist)?j.objekt.cleaning_checklist:[];
-      setChecks(Object.fromEntries(cl.map(l=>[l,false])));
+      const its=(j.report?.cleaning_report_items||[]).map(it=>({item_id:it.item_id,item_label:it.item_label,rating:it.rating||1,comment:it.comment||"",photos:[],videos:[],extra:it.extra_minutes||0}));
+      if(!its.length&&Array.isArray(j.order?.items_to_clean)) setItems(j.order.items_to_clean.map(it=>({item_id:it.item_id,item_label:it.item_label,rating:1,comment:"",photos:[],videos:[],extra:0}))); else setItems(its);
+      const clRaw=Array.isArray(j.order?.cleaning_checklist)?j.order.cleaning_checklist:(Array.isArray(j.objekt?.cleaning_checklist)?j.objekt.cleaning_checklist:[]);
+      const cl=clRaw.map(x=>typeof x==="string"?{label:x,required:false}:{label:x.label||"",required:!!x.required});
+      setChkList(cl); setChecks(Object.fromEntries(cl.map(c=>[c.label,false])));
       setD(j);
     }catch(e){ setD("notfound"); }
   })(); },[token]);
@@ -1970,15 +1994,21 @@ function CleanerOrder({token}){
   const uploadFile=async(file,prefix)=>{ const path=prefix+"/"+Date.now()+"-"+Math.random().toString(36).slice(2,7)+"-"+(file.name||"f").replace(/[^\w.\-]/g,"_"); const {error}=await sb.storage.from("cleaning-media").upload(path,file,{upsert:true,contentType:file.type||"image/jpeg"}); if(error)throw error; return sb.storage.from("cleaning-media").getPublicUrl(path).data.publicUrl; };
   const addDmgPhotos=async(files)=>{ if(!files||!files.length)return; setUpBusy(true); try{ const urls=[]; for(const f of Array.from(files)){ urls.push(await uploadFile(f,"damage/"+token)); } setDmgPhotos(p=>[...p,...urls]); }catch(e){ err(e);} setUpBusy(false); };
   const addItemPhoto=async(idx,files)=>{ if(!files||!files.length)return; setUpBusy(true); try{ const urls=[]; for(const f of Array.from(files)){ urls.push(await uploadFile(f,"item/"+token)); } setItems(arr=>arr.map((it,i)=>i===idx?{...it,photos:[...it.photos,...urls]}:it)); }catch(e){ err(e);} setUpBusy(false); };
+  const addItemVideo=async(idx,files)=>{ if(!files||!files.length)return; setUpBusy(true); try{ const urls=[]; for(const f of Array.from(files)){ urls.push(await uploadFile(f,"video/"+token)); } setItems(arr=>arr.map((it,i)=>i===idx?{...it,videos:[...it.videos,...urls]}:it)); }catch(e){ err(e);} setUpBusy(false); };
+  const setExtra=(idx,v)=>setItems(arr=>arr.map((it,i)=>i===idx?{...it,extra:Math.max(0,parseInt(v||"0",10)||0)}:it));
   const setRating=(idx,v)=>setItems(arr=>arr.map((it,i)=>i===idx?{...it,rating:v}:it));
   const setComment=(idx,v)=>setItems(arr=>arr.map((it,i)=>i===idx?{...it,comment:v}:it));
   const submit=async()=>{
     if(!name.trim())return toast("Bitte deinen Namen eingeben","err");
+    const missReq=chkList.filter(c=>c.required&&!checks[c.label]);
+    if(missReq.length)return toast("Pflicht-Punkt noch offen: "+missReq[0].label,"err");
+    const noVid=items.find(it=>it.rating>=3&&(!it.videos||!it.videos.length));
+    if(noVid)return toast("Video Pflicht bei Bewertung ≥3: "+noVid.item_label,"err");
     setBusy(true);
     try{
       const ms=missing.split(/[\n,]/).map(s=>s.trim()).filter(Boolean);
       const report={ objekt_id:d.order.objekt_id, cleaner_name:name.trim(), signature_data:sig||null, general_comments:gc||null, missing_supplies:ms, damage_noticed:dmg, damage_description:dmg?(dmgDesc||null):null, checklist_completed:checks, start_time:startRef.current, end_time:new Date().toISOString() };
-      const outItems=items.map(it=>({item_id:it.item_id,item_label:it.item_label,selected:true,rating:it.rating,comment:it.comment||null,video_url:it.photos.length?JSON.stringify(it.photos):null}));
+      const outItems=items.map(it=>{ const media=[...(it.photos||[]),...(it.videos||[])]; return {item_id:it.item_id,item_label:it.item_label,selected:true,rating:it.rating,comment:it.comment||null,video_url:media.length?JSON.stringify(media):null,extra_minutes:it.rating>=3?(it.extra||0):0}; });
       const {data,error}=await sb.functions.invoke("submit-cleaning-report",{body:{report,items:outItems,damagePhotos:dmgPhotos,draft_id:d.order.report_id},headers:{"x-cleaning-order-token":token}});
       if(error)throw error; if(data&&data.error)throw new Error(data.error);
       setDone(true);
@@ -1998,14 +2028,22 @@ function CleanerOrder({token}){
           <div className="font-medium text-slate-700 text-sm mb-2">{it.item_label}</div>
           <div className="flex gap-1 flex-wrap mb-2">{[1,2,3,4,5].map(n=><button key={n} onClick={()=>setRating(i,n)} className={"w-9 h-9 rounded-lg text-sm font-semibold "+(it.rating===n?(n>=3?"bg-rose-600 text-white":"bg-emerald-600 text-white"):"bg-slate-100 text-slate-500")}>{n}</button>)}<span className="text-xs text-slate-400 self-center ml-1">{ratLabel[it.rating]}</span></div>
           <input className={inputCls+" text-sm"} value={it.comment} onChange={e=>setComment(i,e.target.value)} placeholder="Kommentar (optional)"/>
-          <label className="inline-flex items-center gap-1 mt-2 text-xs px-2 py-1 rounded bg-slate-100 text-slate-600 font-semibold cursor-pointer">📷 Foto{it.photos.length?` (${it.photos.length})`:""}<input type="file" accept="image/*" multiple className="hidden" onChange={e=>addItemPhoto(i,e.target.files)}/></label>
+          <div className="flex gap-1 mt-2">
+            <label className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-slate-100 text-slate-600 font-semibold cursor-pointer">📷 Foto{it.photos.length?` (${it.photos.length})`:""}<input type="file" accept="image/*" multiple className="hidden" onChange={e=>addItemPhoto(i,e.target.files)}/></label>
+            <label className={"inline-flex items-center gap-1 text-xs px-2 py-1 rounded font-semibold cursor-pointer "+(it.rating>=3&&!it.videos.length?"bg-rose-600 text-white":"bg-slate-100 text-slate-600")}>📹 Video{it.videos.length?` (${it.videos.length})`:""}<input type="file" accept="video/*" multiple className="hidden" onChange={e=>addItemVideo(i,e.target.files)}/></label>
+          </div>
+          {it.rating>=3&&<div className="mt-2 bg-rose-50 border border-rose-200 rounded-lg p-2 space-y-1">
+            <div className="text-xs font-semibold text-rose-700">⚠️ Bewertung ≥ 3 → Video ist Pflicht{it.videos.length?" ✓":" (fehlt)"}</div>
+            <div className="flex items-center gap-2"><span className="text-xs text-slate-600">Mehraufwand:</span><input type="number" min="0" value={it.extra||""} onChange={e=>setExtra(i,e.target.value)} className="w-20 border border-slate-300 rounded px-2 py-1 text-sm" placeholder="0"/><span className="text-xs text-slate-500">Min. extra</span></div>
+          </div>}
         </div>))}
         {!items.length&&<div className="text-sm text-slate-400">Keine Positionen.</div>}</div>
     </Card>
-    {Object.keys(checks).length>0&&<Card className="p-4"><h3 className="font-semibold text-slate-800 mb-2">✅ Allgemeine Checkliste</h3>
-      <div className="space-y-1">{Object.keys(checks).map(k=>(
-        <label key={k} className={"flex items-center gap-2 text-sm px-2 py-1.5 rounded cursor-pointer "+(checks[k]?"bg-emerald-50":"hover:bg-slate-50")}>
-          <input type="checkbox" checked={checks[k]} onChange={()=>toggleCheck(k)}/> <span className="text-slate-700">{k}</span></label>))}</div>
+    {chkList.length>0&&<Card className="p-4"><h3 className="font-semibold text-slate-800 mb-2">✅ Allgemeine Checkliste</h3>
+      <div className="space-y-1">{chkList.map((c,k)=>(
+        <label key={k} className={"flex items-center gap-2 text-sm px-2 py-1.5 rounded cursor-pointer "+(checks[c.label]?"bg-emerald-50":"hover:bg-slate-50")}>
+          <input type="checkbox" checked={!!checks[c.label]} onChange={()=>toggleCheck(c.label)}/> <span className="text-slate-700">{c.label}</span>{c.required&&<span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold">Pflicht</span>}</label>))}</div>
+      {chkList.some(c=>c.required)&&<p className="text-[11px] text-slate-400 mt-1">Pflicht-Punkte müssen abgehakt sein.</p>}
     </Card>}
     <Card className="p-4"><label className="flex items-center gap-2 font-semibold text-slate-800"><input type="checkbox" checked={dmg} onChange={e=>setDmg(e.target.checked)}/> 🛠 Schaden / etwas kaputt?</label>
       {dmg&&<div className="mt-3 space-y-2">
