@@ -623,6 +623,10 @@ function Cleaning({bump}) {
     toast("An Slavik (IMMODAY) übergeben + als Zusatzkosten markiert"); reloadR(); }catch(e){err(e);} };
   const archiveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({archived_at:new Date().toISOString()}).eq("id",o.id);
     if(error)return err(error); toast("Auftrag archiviert"); reloadO(); };
+  const approveOrder=async(o)=>{ const {error}=await sb.from("cleaning_orders").update({approved_at:new Date().toISOString()}).eq("id",o.id);
+    if(error)return err(error); toast("Freigegeben – jetzt an Oxana senden"); reloadO(); };
+  const pendingOrders=orders.filter(o=>!o.approved_at);
+  const approvedOrders=orders.filter(o=>o.approved_at);
   const saveHouse=async(f)=>{ try{ const p={code:f.code,name:f.name||null,address:f.address||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,description:f.description||null,google_review_url:f.google_review_url||null,inspection_items:Array.isArray(f.inspection_items)?f.inspection_items:[],cleaning_checklist:Array.isArray(f.cleaning_checklist)?f.cleaning_checklist:[],updated_at:new Date().toISOString()};
     if(hEdit==="new"){ const {error}=await sb.from("cleaning_objekte").insert(p); if(error)throw error; toast("Haus angelegt"); }
     else { const {error}=await sb.from("cleaning_objekte").update(p).eq("id",hEdit.id); if(error)throw error; toast("Haus gespeichert"); }
@@ -657,9 +661,25 @@ function Cleaning({bump}) {
         </div>
         <div className="flex gap-4 text-xs text-slate-400 pt-3"><span><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 align-middle mr-1"></span>letzte</span><span><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500 align-middle mr-1"></span>nächste</span><span><span className="inline-block w-3 h-0.5 bg-slate-400 align-middle mr-1"></span>heute</span></div>
       </Card>
+      {pendingOrders.length>0&&<Card className="p-5 border-2 border-amber-300 bg-amber-50/40">
+        <h2 className="font-semibold text-slate-800 mb-1">🕓 Auto-Aufträge zur Freigabe ({pendingOrders.length})</h2>
+        <p className="text-xs text-slate-500 mb-3">Automatisch am Auszugstag erzeugt. Freigeben → dann den Link an Oxana senden. (Slavik-Workflow)</p>
+        <div className="space-y-2">{pendingOrders.map(o=>(
+          <div key={o.id} className="border border-amber-200 bg-white rounded-xl px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div><div className="font-medium text-slate-800">{o.cleaning_objekte?.code||"—"} · {Array.isArray(o.items_to_clean)?o.items_to_clean.map(it=>it.item_label).join(", "):""}</div>
+                <div className="text-xs text-slate-400">{o.moeglich_ab?`möglich ab: ${fmt(o.moeglich_ab)} · `:""}bis: {fmt(o.zu_reinigen_bis)}{o.kommentar?` · ${o.kommentar}`:""}</div></div>
+              <div className="flex gap-2">
+                <Btn kind="ok" size="sm" onClick={()=>approveOrder(o)}>✓ Freigeben</Btn>
+                <Btn kind="soft" size="sm" onClick={()=>{navigator.clipboard.writeText(cleanLink(o.token)); toast("Cleaner-Link kopiert");}}>🔗 Link</Btn>
+                <Btn kind="soft" size="sm" onClick={()=>archiveOrder(o)}>Verwerfen</Btn>
+              </div>
+            </div>
+          </div>))}</div>
+      </Card>}
       <Card className="p-5">
-        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🧹 Offene Aufträge ({orders.length})</h2><Btn size="sm" onClick={()=>setNewOrder(true)}>+ Auftrag anlegen</Btn></div>
-        <div className="space-y-2">{orders.map(o=>(
+        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🧹 Offene Aufträge ({approvedOrders.length})</h2><Btn size="sm" onClick={()=>setNewOrder(true)}>+ Auftrag anlegen</Btn></div>
+        <div className="space-y-2">{approvedOrders.map(o=>(
           <div key={o.id} className="border border-slate-200 rounded-xl px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><div className="font-medium text-slate-800">{o.cleaning_objekte?.code||"—"} · {Array.isArray(o.items_to_clean)?o.items_to_clean.length:0} Position(en){o.report_id&&reports.find(r=>r.id===o.report_id&&r.submitted_at)?<span className="ml-1 text-emerald-600 text-xs">· ✓ erledigt</span>:null}</div>
@@ -671,7 +691,7 @@ function Cleaning({bump}) {
             </div>
             {Array.isArray(o.items_to_clean)&&o.items_to_clean.length>0&&<div className="mt-2 flex flex-wrap gap-1">{o.items_to_clean.map((it,k)=><span key={k} className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{it.item_label}</span>)}</div>}
           </div>))}
-          {!orders.length&&<div className="text-sm text-slate-400">Keine offenen Aufträge.</div>}</div>
+          {!approvedOrders.length&&<div className="text-sm text-slate-400">Keine offenen Aufträge.</div>}</div>
       </Card>
       <Card className="p-5">
         <h2 className="font-semibold text-slate-800 mb-1">📋 Reports ({reports.length}, neueste)</h2>
