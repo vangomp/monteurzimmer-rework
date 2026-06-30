@@ -662,7 +662,7 @@ function Cleaning({bump}) {
           <div key={o.id} className="border border-slate-200 rounded-xl px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><div className="font-medium text-slate-800">{o.cleaning_objekte?.code||"—"} · {Array.isArray(o.items_to_clean)?o.items_to_clean.length:0} Position(en){o.report_id&&reports.find(r=>r.id===o.report_id&&r.submitted_at)?<span className="ml-1 text-emerald-600 text-xs">· ✓ erledigt</span>:null}</div>
-                <div className="text-xs text-slate-400">zu reinigen bis: {fmt(o.zu_reinigen_bis)}{o.kommentar?` · ${o.kommentar}`:""}</div></div>
+                <div className="text-xs text-slate-400">{o.moeglich_ab?`möglich ab: ${fmt(o.moeglich_ab)} · `:""}zu reinigen bis: {fmt(o.zu_reinigen_bis)}{o.kommentar?` · ${o.kommentar}`:""}</div></div>
               <div className="flex gap-2">
                 <Btn kind="soft" size="sm" onClick={()=>{navigator.clipboard.writeText(cleanLink(o.token)); toast("Cleaner-Link kopiert");}}>🔗 Link</Btn>
                 <Btn kind="soft" size="sm" onClick={()=>archiveOrder(o)}>Archivieren</Btn>
@@ -745,7 +745,7 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
   const [objId,setObjId]=useState("");
   const [picked,setPicked]=useState({}); // item_id -> item_label
   const [bis,setBis]=useState(()=>{ const d=new Date(Date.now()+86400000); d.setHours(12,0,0,0); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); });
-  const [komm,setKomm]=useState("");
+  const [komm,setKomm]=useState(""); const [ab,setAb]=useState("");
   const [inclChk,setInclChk]=useState(true); const [chkPick,setChkPick]=useState({});
   const [busy,setBusy]=useState(false);
   const [created,setCreated]=useState(null); // token after success
@@ -763,7 +763,7 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
     if(!bis)return toast("Bitte Termin wählen","err");
     const checklist=inclChk?houseChk.filter(c=>chkIncluded(c.label)).map(c=>({label:c.label,required:c.required})):[];
     setBusy(true);
-    try{ const {data,error}=await sb.functions.invoke("create-cleaning-order",{body:{objekt_id:objId,items_to_clean:items,zu_reinigen_bis:new Date(bis).toISOString(),kommentar:komm||null,cleaning_checklist:checklist}});
+    try{ const {data,error}=await sb.functions.invoke("create-cleaning-order",{body:{objekt_id:objId,items_to_clean:items,zu_reinigen_bis:new Date(bis).toISOString(),kommentar:komm||null,cleaning_checklist:checklist,moeglich_ab:ab?new Date(ab).toISOString():null}});
       if(error)throw error; if(data?.error)throw new Error(data.error);
       setCreated(data.token); onCreated&&onCreated(); toast("Auftrag angelegt");
     }catch(e){ err(e); } setBusy(false);
@@ -803,9 +803,10 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
         :<p className="text-xs text-slate-400 mt-1">Minimalauftrag – keine Checkliste für die Reinigungskraft.</p>}
       </div>
       <div className="grid sm:grid-cols-2 gap-3 mt-3">
+        <Field label="Möglich ab (Zimmer frei)"><input type="datetime-local" className={inputCls} value={ab} onChange={e=>setAb(e.target.value)}/></Field>
         <Field label="Zu reinigen bis"><input type="datetime-local" className={inputCls} value={bis} onChange={e=>setBis(e.target.value)}/></Field>
-        <Field label="Kommentar (optional)"><input className={inputCls} value={komm} onChange={e=>setKomm(e.target.value)} placeholder="z.B. Bettwäsche wechseln"/></Field>
       </div>
+      <Field label="Kommentar (optional)"><input className={inputCls} value={komm} onChange={e=>setKomm(e.target.value)} placeholder="z.B. Bettwäsche wechseln"/></Field>
       <div className="text-xs text-slate-400 mt-1">{items.length} Position(en) ausgewählt</div>
     </div>}
     <div className="mt-4 flex justify-end gap-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn><Btn kind="ok" onClick={create} disabled={busy}>{busy?"…":"Auftrag erstellen"}</Btn></div>
@@ -2021,6 +2022,7 @@ function CleanerOrder({token}){
   return (<div className="min-h-screen p-3 sm:p-4"><div className="max-w-lg mx-auto py-3 space-y-4">
     <div><h2 className="text-lg font-bold text-slate-800">🧹 Reinigung · {d.objekt?.code||d.objekt?.name||""}</h2>
       <p className="text-xs text-slate-400">Zu reinigen bis: {fmt(d.order?.zu_reinigen_bis)}{d.order?.kommentar?` · ${d.order.kommentar}`:""}</p></div>
+    {d.order?.moeglich_ab&&<div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-sm text-blue-800 font-semibold">🚪 Zimmer frei / Zugang möglich ab: {new Date(d.order.moeglich_ab).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"})} Uhr</div>}
     <Card className="p-4"><Field label="Dein Name *"><input className={inputCls} value={name} onChange={e=>setName(e.target.value)} placeholder="Name der Reinigungskraft"/></Field></Card>
     <Card className="p-4"><h3 className="font-semibold text-slate-800 mb-2">Positionen (1 = top sauber … 5 = schlecht)</h3>
       <div className="space-y-3">{items.map((it,i)=>(
