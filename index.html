@@ -610,12 +610,13 @@ function Cleaning({bump}) {
   const [ritems]=useList(loaders.reportItems,[bump]);
   const [objekte,reloadObj]=useList(loaders.objekte,[bump]);
   const [rooms]=useList(loaders.rooms,[bump]);
+  const [res]=useList(loaders.reservations,[bump]);
   const [nuki]=useList(loaders.nuki,[bump]);
   const [hEdit,setHEdit]=useState(null);
   const [newOrder,setNewOrder]=useState(false);
   const [repView,setRepView]=useState(null);
   const cleanLink=(t)=>(typeof window!=="undefined"?window.location.origin:"")+"/?clean="+t;
-  if(!orders||!reports||!ritems||!objekte||!nuki||!rooms) return <Skeleton/>;
+  if(!orders||!reports||!ritems||!objekte||!nuki||!rooms||!res) return <Skeleton/>;
   const worstBy={}; ritems.forEach(it=>{ worstBy[it.report_id]=Math.max(worstBy[it.report_id]||0,it.rating||0); });
   const flagBad=async(r,worst)=>{ try{ const {error}=await sb.from("cleaning_reports").update({extra_cleaning_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq("id",r.id); if(error)throw error;
     try{ await sbImmo.from("tasks").insert({description:`Reinigung mangelhaft (Bewertung ${worst}/5): ${r.cleaning_objekte?.code||"—"} · ${r.cleaner_name||""} (${fmt(r.submitted_at)}) → Nachreinigung + Zusatzkosten der Firma berechnen`,priority:"high",flag:"help"}); }catch(e){}
@@ -696,7 +697,7 @@ function Cleaning({bump}) {
           </div>);})}</div>
       </Card>
       {hEdit&&<HouseForm rec={hEdit==="new"?null:hEdit} onSave={saveHouse} onClose={()=>setHEdit(null)}/>}
-      {newOrder&&<CleaningOrderForm objekte={objekte} rooms={rooms} cleanLink={cleanLink} onClose={()=>setNewOrder(false)} onCreated={reloadO}/>}
+      {newOrder&&<CleaningOrderForm objekte={objekte} rooms={rooms} res={res} cleanLink={cleanLink} onClose={()=>setNewOrder(false)} onCreated={reloadO}/>}
       {repView&&<ReportDetail report={repView} onClose={()=>setRepView(null)}/>}
     </div>
   );
@@ -741,11 +742,11 @@ function ReportDetail({report,onClose}){
     </div>}
   </Modal>);
 }
-function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
+function CleaningOrderForm({objekte,rooms,res,cleanLink,onClose,onCreated}){
   const [objId,setObjId]=useState("");
   const [picked,setPicked]=useState({}); // item_id -> item_label
   const [bis,setBis]=useState(()=>{ const d=new Date(Date.now()+86400000); d.setHours(12,0,0,0); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); });
-  const [komm,setKomm]=useState(""); const [ab,setAb]=useState("");
+  const [komm,setKomm]=useState(""); const [ab,setAb]=useState(""); const [abTouched,setAbTouched]=useState(false);
   const [inclChk,setInclChk]=useState(true); const [chkPick,setChkPick]=useState({});
   const [busy,setBusy]=useState(false);
   const [created,setCreated]=useState(null); // token after success
@@ -757,6 +758,13 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
   const toggleChk=(label)=>setChkPick(p=>({...p,[label]:p[label]===false?true:false}));
   const toggle=(id,label)=>setPicked(p=>{ const n={...p}; if(n[id])delete n[id]; else n[id]=label; return n; });
   const items=Object.entries(picked).map(([item_id,item_label])=>({item_id,item_label}));
+  // Auto-fill "Möglich ab" aus den Reservierungen der gewählten Zimmer (= wann der aktuelle Gast auszieht)
+  const pickedRoomIds=Object.keys(picked).filter(k=>k.startsWith("room-")).map(k=>k.slice(5));
+  const roomCheckouts=pickedRoomIds.map(id=>{ const cand=(res||[]).filter(r=>!r.archived_at&&r.room_id===id&&r.check_out_date&&daysFromToday(r.check_out_date)>=0).sort((a,b)=>a.check_out_date<b.check_out_date?-1:1)[0]; return cand?cand.check_out_date:null; }).filter(Boolean);
+  const latestCheckout=roomCheckouts.length?roomCheckouts.slice().sort().slice(-1)[0]:null; // YYYY-MM-DD
+  const checkoutFuture=latestCheckout?daysFromToday(latestCheckout)>0:false;
+  const abBeforeCheckout=ab&&latestCheckout?(ab.slice(0,10)<latestCheckout):false;
+  useEffect(()=>{ if(abTouched)return; if(latestCheckout)setAb(latestCheckout+"T11:00"); else setAb(""); },[latestCheckout,abTouched]);
   const create=async()=>{
     if(!objId)return toast("Bitte Haus wählen","err");
     if(!items.length)return toast("Bitte mind. ein Zimmer/Bereich wählen","err");
@@ -777,7 +785,7 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
       <div className="mt-4 flex justify-end"><Btn kind="ok" onClick={onClose}>Fertig</Btn></div>
     </Modal>); }
   return (<Modal title="🧹 Reinigungsauftrag anlegen" onClose={onClose}>
-    <Field label="Haus"><select className={inputCls} value={objId} onChange={e=>{setObjId(e.target.value);setPicked({});setChkPick({});setInclChk(true);}}>
+    <Field label="Haus"><select className={inputCls} value={objId} onChange={e=>{setObjId(e.target.value);setPicked({});setChkPick({});setInclChk(true);setAbTouched(false);}}>
       <option value="">— wählen —</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code}{o.name?` · ${o.name}`:""}</option>)}</select></Field>
     {objId&&<div className="mt-2">
       <div className="text-xs font-semibold text-slate-500 uppercase mb-1">Zimmer</div>
@@ -803,9 +811,12 @@ function CleaningOrderForm({objekte,rooms,cleanLink,onClose,onCreated}){
         :<p className="text-xs text-slate-400 mt-1">Minimalauftrag – keine Checkliste für die Reinigungskraft.</p>}
       </div>
       <div className="grid sm:grid-cols-2 gap-3 mt-3">
-        <Field label="Möglich ab (Zimmer frei)"><input type="datetime-local" className={inputCls} value={ab} onChange={e=>setAb(e.target.value)}/></Field>
+        <Field label="Möglich ab (Zimmer frei)"><input type="datetime-local" className={inputCls} value={ab} onChange={e=>{setAb(e.target.value);setAbTouched(true);}}/></Field>
         <Field label="Zu reinigen bis"><input type="datetime-local" className={inputCls} value={bis} onChange={e=>setBis(e.target.value)}/></Field>
       </div>
+      {latestCheckout&&<div className={"text-xs rounded-lg px-3 py-2 mt-1 "+(abBeforeCheckout?"bg-rose-50 border border-rose-200 text-rose-700 font-semibold":"bg-blue-50 border border-blue-200 text-blue-700")}>
+        {abBeforeCheckout?"⚠️ ":(checkoutFuture?"🚪 ":"✓ ")}Aktueller Gast {checkoutFuture?"zieht aus":"ausgezogen"} am {fmt(latestCheckout)}{abBeforeCheckout?" — „Möglich ab" liegt DAVOR, Gast evtl. noch im Zimmer!":" — Reinigung erst danach."}{!abTouched&&" (automatisch übernommen)"}
+      </div>}
       <Field label="Kommentar (optional)"><input className={inputCls} value={komm} onChange={e=>setKomm(e.target.value)} placeholder="z.B. Bettwäsche wechseln"/></Field>
       <div className="text-xs text-slate-400 mt-1">{items.length} Position(en) ausgewählt</div>
     </div>}
