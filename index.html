@@ -764,6 +764,8 @@ function CleaningOrderForm({objekte,rooms,res,cleanLink,onClose,onCreated}){
   const latestCheckout=roomCheckouts.length?roomCheckouts.slice().sort().slice(-1)[0]:null; // YYYY-MM-DD
   const checkoutFuture=latestCheckout?daysFromToday(latestCheckout)>0:false;
   const abBeforeCheckout=ab&&latestCheckout?(ab.slice(0,10)<latestCheckout):false;
+  let abInfo="";
+  if(latestCheckout){ abInfo=(abBeforeCheckout?"⚠️":(checkoutFuture?"🚪":"✅"))+" Aktueller Gast "+(checkoutFuture?"zieht aus":"ausgezogen")+" am "+fmt(latestCheckout)+(abBeforeCheckout?" — Achtung: Reinigung liegt VOR dem Auszug, Gast evtl. noch im Zimmer!":" — Reinigung erst danach.")+(abTouched?"":" (automatisch uebernommen)"); }
   useEffect(()=>{ if(abTouched)return; if(latestCheckout)setAb(latestCheckout+"T11:00"); else setAb(""); },[latestCheckout,abTouched]);
   const create=async()=>{
     if(!objId)return toast("Bitte Haus wählen","err");
@@ -814,9 +816,7 @@ function CleaningOrderForm({objekte,rooms,res,cleanLink,onClose,onCreated}){
         <Field label="Möglich ab (Zimmer frei)"><input type="datetime-local" className={inputCls} value={ab} onChange={e=>{setAb(e.target.value);setAbTouched(true);}}/></Field>
         <Field label="Zu reinigen bis"><input type="datetime-local" className={inputCls} value={bis} onChange={e=>setBis(e.target.value)}/></Field>
       </div>
-      {latestCheckout&&<div className={"text-xs rounded-lg px-3 py-2 mt-1 "+(abBeforeCheckout?"bg-rose-50 border border-rose-200 text-rose-700 font-semibold":"bg-blue-50 border border-blue-200 text-blue-700")}>
-        {abBeforeCheckout?"⚠️ ":(checkoutFuture?"🚪 ":"✓ ")}Aktueller Gast {checkoutFuture?"zieht aus":"ausgezogen"} am {fmt(latestCheckout)}{abBeforeCheckout?" — „Möglich ab" liegt DAVOR, Gast evtl. noch im Zimmer!":" — Reinigung erst danach."}{!abTouched&&" (automatisch übernommen)"}
-      </div>}
+      {latestCheckout&&<div className={"text-xs rounded-lg px-3 py-2 mt-1 "+(abBeforeCheckout?"bg-rose-50 border border-rose-200 text-rose-700 font-semibold":"bg-blue-50 border border-blue-200 text-blue-700")}>{abInfo}</div>}
       <Field label="Kommentar (optional)"><input className={inputCls} value={komm} onChange={e=>setKomm(e.target.value)} placeholder="z.B. Bettwäsche wechseln"/></Field>
       <div className="text-xs text-slate-400 mt-1">{items.length} Position(en) ausgewählt</div>
     </div>}
