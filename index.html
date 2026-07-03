@@ -181,7 +181,7 @@ function Cockpit({go,bump}) {
   const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0); // checked in, incl. überfällig
   const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0 && daysFromToday(r.check_out_date)<0);
   const leaving=active.filter(r=>{const d=daysFromToday(r.check_out_date);return d>=0&&d<=3;});
-  const free=rooms.filter(r=>r.status==="available").length;
+  const free=rooms.filter(r=>r.status==="ready"||r.status==="available").length;
   const lowBat=nuki.filter(n=>n.battery_charge<25);
   const pendExt=ext.filter(e=>e.status==="pending");
   // ---- metrics (archived bookings included for historical stats) ----
@@ -312,7 +312,7 @@ function Reservations({bump}) {
   const archive=async(r)=>{ const archiving=!r.archived_at;
     const {error}=await sb.from("reservations").update({archived_at:archiving?new Date().toISOString():null}).eq("id",r.id);
     if(error)return err(error);
-    if(archiving && r.room_id) await sb.from("rooms").update({status:"available"}).eq("id",r.room_id);
+    if(archiving && r.room_id) await sb.from("rooms").update({status:"dirty"}).eq("id",r.room_id);
     toast(archiving?"Archiviert · Zimmer freigegeben":"Wiederhergestellt"); reload(); };
   const toggleQonto=async(r)=>{ const {error}=await sb.from("reservations").update({qonto_billed:!r.qonto_billed}).eq("id",r.id); if(error)return err(error); reload(); };
   const confirmRes=async(r)=>{ const {error}=await sb.from("reservations").update({status:"confirmed"}).eq("id",r.id); if(error)return err(error); toast("Reservierung bestätigt"); reload(); };
@@ -443,7 +443,7 @@ function Rooms({bump}) {
           <div className="bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700 flex justify-between">
             <span>🏠 {code}</span><span className="text-xs text-slate-400 font-normal">{list.filter(r=>r.status==="occupied").length}/{list.length} belegt</span></div>
           <table className="w-full text-sm">
-            <tbody>{list.map(r=>{const[pt,pc]=({occupied:["Belegt","bg-blue-100 text-blue-700"],available:["Frei","bg-emerald-100 text-emerald-700"],maintenance:["Wartung","bg-slate-200 text-slate-600"]}[r.status]||["—","bg-slate-100"]);return(
+            <tbody>{list.map(r=>{const[pt,pc]=({occupied:["Belegt","bg-blue-100 text-blue-700"],dirty:["Ausgezogen, dreckig","bg-rose-100 text-rose-700"],ready:["Gereinigt, bereit","bg-emerald-100 text-emerald-700"],available:["Gereinigt, bereit","bg-emerald-100 text-emerald-700"],maintenance:["Wartung","bg-slate-200 text-slate-600"]}[r.status]||["—","bg-slate-100"]);return(
               <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
                 <td className="p-3"><div className="font-semibold text-slate-800">{r.room_number}</div>{(()=>{const o=occupant(r.id);return o?<div className="text-xs font-medium text-blue-700">🏢 {o.guest_name||o.code} <span className={"font-normal "+(daysFromToday(o.check_out_date)<0?"text-rose-500":"text-slate-400")}>bis {fmtShort(o.check_out_date)}</span></div>:(r.status==="occupied"?<div className="text-xs text-slate-400">belegt · keine Buchung zugeordnet</div>:null);})()}</td>
                 <td className="p-3 text-slate-500 text-xs">👤 {r.capacity}</td>
@@ -451,7 +451,7 @@ function Rooms({bump}) {
                 <td className="p-3 text-slate-500 text-xs">📶 {r.wifi_ssid||"—"}</td>
                 <td className="p-3 text-xs">{(()=>{const a=batAge(r.door_battery_changed_at);const od=a!=null&&a>180;return r.door_battery_changed_at?<span className={od?"text-rose-600 font-semibold":"text-slate-500"} title="Türschloss-Akku zuletzt gewechselt">🔋 {fmtShort(r.door_battery_changed_at)}{od?" · fällig":""}</span>:<span className="text-slate-300" title="Kein Türakku-Wechsel notiert">🔋 —</span>;})()}{Array.isArray(r.photos)&&r.photos.length?<span className="ml-2 text-slate-400" title="Fotos">📷 {r.photos.length}</span>:null}</td>
                 <td className="p-3"><select value={r.status} onChange={e=>setStatus(r,e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1 text-xs">
-                  <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></td>
+                  <option value="occupied">Belegt</option><option value="dirty">Ausgezogen, dreckig</option><option value="ready">Gereinigt, bereit</option><option value="maintenance">Wartung</option></select></td>
                 <td className="p-3 text-right whitespace-nowrap"><IconBtn title="Türakku heute gewechselt" color="text-emerald-600" onClick={()=>batteryChanged(r)}>🔋</IconBtn><IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn><IconBtn title="Löschen" color="text-rose-600" onClick={()=>del(r)}>🗑</IconBtn></td>
               </tr>);})}</tbody>
           </table>
@@ -461,7 +461,7 @@ function Rooms({bump}) {
   );
 }
 function RoomForm({rec,objekte,onSave,onClose}) {
-  const [f,setF]=useState({ room_number:rec?.room_number||"", objekt_id:rec?.objekt_id||"", capacity:rec?.capacity||1, status:rec?.status||"available",
+  const [f,setF]=useState({ room_number:rec?.room_number||"", objekt_id:rec?.objekt_id||"", capacity:rec?.capacity||1, status:rec?.status||"ready",
     door_code:rec?.door_code||"", house_door_code:rec?.house_door_code||"", wifi_ssid:rec?.wifi_ssid||"", wifi_password:rec?.wifi_password||"",
     photos:Array.isArray(rec?.photos)?rec.photos:[], intro_video_url:rec?.intro_video_url||"", door_battery_changed_at:rec?.door_battery_changed_at||"" });
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
@@ -494,7 +494,7 @@ function RoomForm({rec,objekte,onSave,onClose}) {
         <Field label="WLAN-Passwort"><input className={inputCls} value={f.wifi_password} onChange={e=>u("wifi_password",e.target.value)}/></Field>
       </div>
       <Field label="Status"><select className={inputCls} value={f.status} onChange={e=>u("status",e.target.value)}>
-        <option value="available">Frei</option><option value="occupied">Belegt</option><option value="maintenance">Wartung</option></select></Field>
+        <option value="occupied">Belegt</option><option value="dirty">Ausgezogen, dreckig</option><option value="ready">Gereinigt, bereit</option><option value="maintenance">Wartung</option></select></Field>
       <Field label="Check-in / Lage-Video">
         <input className={inputCls} value={f.intro_video_url} onChange={e=>u("intro_video_url",e.target.value)} placeholder="https://… (YouTube-Link) – oder Video hochladen ↓"/>
         <div className="flex items-center gap-2 mt-2">
