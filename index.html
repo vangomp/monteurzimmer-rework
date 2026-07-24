@@ -530,6 +530,18 @@ function Rooms({bump}) {
           makeVacant = true;
         }
       }
+    } else if (status === "maintenance") {
+      const taskDesc = prompt(`Was muss in Zimmer ${r.room_number} repariert/gewartet werden? (Vitaly-Todo in Immoday)`);
+      if (taskDesc && taskDesc.trim()) {
+        const {data,error:todoErr}=await sb.rpc("create_maintenance_todo",{
+          p_room_id: r.id,
+          p_room_number: r.room_number,
+          p_house_code: r.cleaning_objekte?.code || "",
+          p_task_desc: taskDesc.trim()
+        });
+        if (todoErr) err(todoErr);
+        else toast("Wartungsaufgabe für Vitaly angelegt!");
+      }
     }
     const {error}=await sb.from("rooms").update({status}).eq("id",r.id);
     if(error)return err(error);
