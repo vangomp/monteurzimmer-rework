@@ -149,6 +149,8 @@ const loaders = {
   anmeldungen: ()=> sb.from("check_ins").select("id, full_name, birth_date, birth_place, checked_in_at, wgb_issued_at, reservations(guest_name, check_in_date, check_out_date, rooms(room_number, cleaning_objekte(code,name,address)))").order("checked_in_at",{ascending:false}).then(r=>r.data||[]),
   extensions: ()=> sb.from("extension_requests").select("*, check_ins(full_name, reservations(code, room_id, check_out_date, rooms(room_number)))").order("created_at",{ascending:false}).then(r=>r.data||[]),
   nuki: ()=> sb.from("nuki_lock_status").select("lock_name,battery_charge,battery_critical,last_checked_at").order("lock_name").then(r=>r.data||[]),
+  minutDevices: ()=> sb.from("minut_devices").select("*, cleaning_objekte(code,name)").order("name").then(r=>r.data||[]),
+  sensorAlerts: ()=> sb.from("sensor_alerts").select("*, minut_devices(name), cleaning_objekte(code,name)").order("triggered_at",{ascending:false}).then(r=>r.data||[]),
   orders: ()=> sb.from("cleaning_orders").select("*, cleaning_objekte(code,name)").is("archived_at",null).order("created_at",{ascending:false}).then(r=>r.data||[]),
   reports: ()=> sb.from("cleaning_reports").select("*, cleaning_objekte(code,name)").order("submitted_at",{ascending:false}).limit(40).then(r=>r.data||[]),
   reportItems: ()=> sb.from("cleaning_report_items").select("report_id,rating").then(r=>r.data||[]),
@@ -176,8 +178,10 @@ function Cockpit({go,bump}) {
   const [fups,reloadFups]=useList(loaders.followups,[bump]);
   const [creports]=useList(loaders.reports,[bump]);
   const [critems]=useList(loaders.reportItems,[bump]);
+  const [minutDevices,reloadMinut]=useList(loaders.minutDevices,[bump]);
+  const [sensorAlerts,reloadAlerts]=useList(loaders.sensorAlerts,[bump]);
   const [fuText,setFuText]=useState("");
-  if(!rooms||!res||!nuki||!ext||!issues||!qi||!fups||!creports||!critems) return <Skeleton/>;
+  if(!rooms||!res||!nuki||!ext||!issues||!qi||!fups||!creports||!critems||!minutDevices||!sensorAlerts) return <Skeleton/>;
   const active=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0); // checked in, incl. überfällig
   const overdue=res.filter(r=>!r.archived_at && daysFromToday(r.check_in_date)<=0 && daysFromToday(r.check_out_date)<0);
   const leaving=active.filter(r=>{const d=daysFromToday(r.check_out_date);return d>=0&&d<=3;});
@@ -205,6 +209,15 @@ function Cockpit({go,bump}) {
   const openInvSum=Math.round(openInv.reduce((a,x)=>a+(+x.amount||0),0));
   const eurNight=qi.length&&ytdNights?Math.round(invoicedTotal/ytdNights):null;
   const todo=[];
+  const activeAlerts = sensorAlerts.filter(a => a.status === "open");
+  activeAlerts.forEach(a => {
+    todo.push(["🚨", `${a.sensor_type === "noise" ? "🔊 LÄRM" : a.sensor_type === "smoke" ? "🔥 RAUCH" : a.sensor_type === "water" ? "💧 WASSER" : "⚠ SENSOR"}: ${a.message}`, "Gelöst", async () => {
+      const {error}=await sb.from("sensor_alerts").update({status:"resolved",resolved_at:new Date().toISOString()}).eq("id",a.id);
+      if(error) return err(error);
+      toast("Alarm gelöst");
+      reloadAlerts();
+    }, a.severity === "critical" ? "rose" : "amber"]);
+  });
   if(leaving.length) todo.push(["⏳",`${leaving.length} Aufenthalt(e) laufen in ≤3 Tagen aus`,"Reservierungen",()=>go("res"),"amber"]);
   if(overdue.length) todo.push(["⚠️",`${overdue.length} Aufenthalt(e) überfällig`,"Anzeigen",()=>go("res"),"rose"]);
   if(pendExt.length) todo.push(["📩",`${pendExt.length} offene Verlängerungs-Anfrage(n)`,"Freigeben",()=>go("ext"),"blue"]);
@@ -272,6 +285,90 @@ function Cockpit({go,bump}) {
             <div className="text-sm font-medium text-slate-700">{l.lock_name}</div>
             <div className="flex justify-between text-xs"><Battery v={l.battery_charge}/><span className="text-slate-400">{l.battery_critical?"kritisch":fmtShort(l.last_checked_at)}</span></div>
           </div>))}</div>}
+      </Card>
+      
+      <Card className="p-5">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <h2 className="font-semibold text-slate-800">🔊 Sensoren & Smart-Home (Minut & X-Sense)</h2>
+          <div className="flex gap-2">
+            <button onClick={async () => {
+              const {error} = await sb.from("sensor_alerts").insert({
+                objekt_id: "44c4879a-2f8f-4df6-910f-c5aa4958d1c8", // GS6
+                device_id: "minut_gs6",
+                sensor_type: "noise",
+                severity: "critical",
+                message: "Lärmpegel überschritten: 85 dB im Haus GS6 (Gambacher Straße 6)",
+                status: "open"
+              });
+              if (error) return err(error);
+              toast("Lärmalarm simuliert");
+              reloadAlerts();
+            }} className="text-xs px-2.5 py-1 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200 font-semibold">⚡ Test-Lärmalarm</button>
+            <button onClick={async () => {
+              const {error} = await sb.from("sensor_alerts").insert({
+                objekt_id: "a841e6a6-a9fc-4580-8b25-de4427ee68e5", // WS20
+                sensor_type: "smoke",
+                severity: "critical",
+                message: "Rauchalarm im Haus WS20 (Wetzlarer Straße 20) ausgelöst!",
+                status: "open"
+              });
+              if (error) return err(error);
+              toast("Rauchalarm simuliert");
+              reloadAlerts();
+            }} className="text-xs px-2.5 py-1 rounded-lg bg-red-600 text-white hover:bg-red-700 font-semibold">🔥 Test-Rauchalarm</button>
+            <button onClick={()=>{reloadMinut();reloadAlerts();toast("Sensoren aktualisiert");}} className="text-xs px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 font-semibold">↻</button>
+          </div>
+        </div>
+        
+        {activeAlerts.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {activeAlerts.map(a => (
+              <div key={a.id} className="flex items-center justify-between p-3 border border-rose-200 bg-rose-50 text-rose-700 rounded-xl">
+                <div className="text-sm font-semibold flex items-center gap-2">
+                  <span>🚨</span>
+                  <div>
+                    <div>{a.message}</div>
+                    <div className="text-xs opacity-75 font-normal">{fmt(a.triggered_at)} · Typ: {a.sensor_type} · Schweregrad: {a.severity}</div>
+                  </div>
+                </div>
+                <button onClick={async () => {
+                  const {error} = await sb.from("sensor_alerts").update({status:"resolved", resolved_at: new Date().toISOString()}).eq("id", a.id);
+                  if (error) return err(error);
+                  toast("Alarm gelöst");
+                  reloadAlerts();
+                }} className="text-xs px-2.5 py-1 bg-rose-600 text-white rounded-lg hover:bg-rose-700 font-semibold">Als gelöst markieren</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {minutDevices.map(d => (
+            <div key={d.id} className="rounded-xl px-3 py-2 border border-emerald-200 bg-emerald-50">
+              <div className="text-sm font-semibold text-slate-700 flex items-center justify-between">
+                <span>📶 {d.name}</span>
+                <span className="text-xs text-emerald-600 font-bold">Online</span>
+              </div>
+              <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-slate-500">
+                <div>🔊 Noise: <strong>{d.noise_level} dB</strong></div>
+                <div>🌡 Temp: <strong>{d.temperature} °C</strong></div>
+                <div>💧 Hum: <strong>{d.humidity} %</strong></div>
+                <div>👥 Count: <strong>{d.occupancy_count} Pers.</strong></div>
+                <div className="col-span-2">🔋 Batterie: <strong className={d.battery_charge < 25 ? "text-rose-600 font-bold" : ""}>{d.battery_charge}%</strong></div>
+              </div>
+            </div>
+          ))}
+          <div className="rounded-xl px-3 py-2 border border-dashed border-amber-300 bg-amber-50">
+            <div className="text-sm font-semibold text-slate-700 flex items-center justify-between">
+              <span>📶 FWS17-Kölschhausen</span>
+              <span className="text-xs text-amber-600 font-bold">Gerät fehlt!</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              <div>Einheit in Minut vorhanden, Gerät fehlt vor Ort.</div>
+              <div className="font-semibold text-amber-700 mt-1">API-Anbindung vorbereitet.</div>
+            </div>
+          </div>
+        </div>
       </Card>
     </div>
   );
