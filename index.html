@@ -515,9 +515,9 @@ function ResForm({rec,rooms,reservations,onSave,onClose}) {
 function Rooms({bump}) {
   const [rows,reload]=useList(loaders.rooms,[bump]);
   const [objekte]=useList(loaders.objekte,[bump]);
-  const [res]=useList(loaders.reservations,[bump]);
+  const [res,reloadRes]=useList(loaders.reservations,[bump]);
   const [edit,setEdit]=useState(null);
-  if(!rows) return <Skeleton/>;
+  if(!rows || !objekte || !res) return <Skeleton/>;
   const resByRoom={}; (res||[]).forEach(r=>{ if(!r.room_id||r.archived_at) return; (resByRoom[r.room_id]=resByRoom[r.room_id]||[]).push(r); });
   const occupant=(id)=>{ const l=resByRoom[id]; if(!l||!l.length) return null;
     return l.find(r=>daysFromToday(r.check_in_date)<=0&&daysFromToday(r.check_out_date)>=0) || l.slice().sort((a,b)=>new Date(b.check_out_date)-new Date(a.check_out_date))[0]; };
@@ -555,6 +555,7 @@ function Rooms({bump}) {
       toast("Status aktualisiert");
     }
     reload();
+    reloadRes();
   };
   const checkoutRoom=async(r)=>{
     const activeOcc = resByRoom[r.id]?.find(o=>daysFromToday(o.check_in_date)<=0&&daysFromToday(o.check_out_date)>=0);
@@ -567,6 +568,7 @@ function Rooms({bump}) {
     if(roomErr)return err(roomErr);
     toast("Zimmer freigegeben");
     reload();
+    reloadRes();
   };
   const batteryChanged=async(r)=>{ if(!confirm(`Türschloss-Akku von ${r.room_number} heute gewechselt?`))return; const {error}=await sb.from("rooms").update({door_battery_changed_at:new Date().toISOString().slice(0,10)}).eq("id",r.id); if(error)return err(error); toast("Türakku-Wechsel notiert"); reload(); };
   const batAge=(d)=> d?Math.floor((Date.now()-new Date(d))/86400000):null;
