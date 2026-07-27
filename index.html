@@ -141,8 +141,9 @@ function useList(loader, deps=[]) {
   return [data,reload];
 }
 const loaders = {
-  rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name)").order("room_number").then(r=>r.data||[]),
+  rooms: ()=> sb.from("rooms").select("*, cleaning_objekte(code,name), flats(id,name,door_code,wifi_ssid,wifi_password)").order("room_number").then(r=>r.data||[]),
   roomsMin: ()=> sb.from("rooms").select("id,room_number,capacity").order("room_number").then(r=>r.data||[]),
+  flats: ()=> sb.from("flats").select("*, cleaning_objekte(code)").order("name").then(r=>r.data||[]),
   objekte: ()=> sb.from("cleaning_objekte").select("id,code,name,address,wifi_ssid,wifi_password,description,google_review_url,inspection_items,cleaning_checklist").order("code").then(r=>r.data||[]),
   reservations: ()=> sb.from("reservations").select("*, rooms(room_number, capacity, cleaning_objekte(code))").order("check_in_date",{ascending:false}).then(r=>r.data||[]),
   checkins: ()=> sb.from("check_ins").select("*, reservations(code, guest_name, rooms(room_number))").order("checked_in_at",{ascending:false}).limit(50).then(r=>r.data||[]),
@@ -515,10 +516,11 @@ function ResForm({rec,rooms,reservations,onSave,onClose}) {
 function Rooms({bump}) {
   const [rows,reload]=useList(loaders.rooms,[bump]);
   const [objekte]=useList(loaders.objekte,[bump]);
+  const [flats,reloadFlats]=useList(loaders.flats,[bump]);
   const [res,reloadRes]=useList(loaders.reservations,[bump]);
   const [edit,setEdit]=useState(null);
   const [relocate,setRelocate]=useState(null);
-  if(!rows || !objekte || !res) return <Skeleton/>;
+  if(!rows || !objekte || !flats || !res) return <Skeleton/>;
   const resByRoom={}; (res||[]).forEach(r=>{ if(!r.room_id||r.archived_at) return; (resByRoom[r.room_id]=resByRoom[r.room_id]||[]).push(r); });
   const occupant=(id)=>{ const l=resByRoom[id]; if(!l||!l.length) return null;
     return l.find(r=>daysFromToday(r.check_in_date)<=0&&daysFromToday(r.check_out_date)>=0) || l.slice().sort((a,b)=>new Date(b.check_out_date)-new Date(a.check_out_date))[0]; };
@@ -595,7 +597,8 @@ function Rooms({bump}) {
         
         if (guestEmail) {
           const link = (typeof window !== "undefined" ? window.location.origin : "") + "/?code=" + activeOcc.code;
-          const doorCodeText = targetRoom.door_code + (targetRoom.door_code_2 ? " (Zimmer) · Wohnungstür-Code: " + targetRoom.door_code_2 : "");
+          const resolvedDoorCode2 = targetRoom.flats?.door_code || targetRoom.door_code_2 || "";
+          const doorCodeText = targetRoom.door_code + (resolvedDoorCode2 ? " (Zimmer) · Wohnungstür-Code: " + resolvedDoorCode2 : "");
           
           await sendMail("checkin_confirmation", guestEmail.trim(), activeOcc.preferred_language || "de", {
             guestName: guestName,
@@ -606,8 +609,8 @@ function Rooms({bump}) {
             checkInDate: activeOcc.check_in_date || "",
             checkOutDate: activeOcc.check_out_date || "",
             houseAddress: [targetRoom.cleaning_objekte?.name, targetRoom.cleaning_objekte?.address].filter(Boolean).join(" · "),
-            wifiSsid: targetRoom.wifi_ssid || "",
-            wifiPassword: targetRoom.wifi_password || "",
+            wifiSsid: targetRoom.wifi_ssid || targetRoom.flats?.wifi_ssid || "",
+            wifiPassword: targetRoom.wifi_password || targetRoom.flats?.wifi_password || "",
             youtubeDoorLink: targetRoom.intro_video_url || targetRoom.youtube_door_link || "",
             checkoutLink: link,
             extensionLink: link
@@ -632,7 +635,8 @@ function Rooms({bump}) {
   const save=async(f)=>{ try{
     const p={room_number:f.room_number,objekt_id:f.objekt_id||null,capacity:Number(f.capacity)||1,status:f.status,
       door_code:f.door_code||null,door_code_2:f.door_code_2||null,house_door_code:f.house_door_code||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,
-      photos:f.photos||[],intro_video_url:f.intro_video_url||null,door_battery_changed_at:f.door_battery_changed_at||null};
+      photos:f.photos||[],intro_video_url:f.intro_video_url||null,door_battery_changed_at:f.door_battery_changed_at||null,
+      flat_id:f.flat_id||null};
     if(edit==="new"){ const {error}=await sb.from("rooms").insert(p); if(error)throw error; toast("Zimmer angelegt"); }
     else { const {error}=await sb.from("rooms").update(p).eq("id",edit.id); if(error)throw error; toast("Gespeichert"); }
     setEdit(null); reload(); }catch(e){err(e);} };
@@ -653,7 +657,7 @@ function Rooms({bump}) {
                 <td className="p-3 text-slate-500 text-xs">👤 {r.capacity}</td>
                 <td className="p-3 font-mono text-amber-700 text-xs">
                   <div>Z: {r.door_code||"—"}</div>
-                  {r.door_code_2 && <div className="text-[10px] text-slate-400">W: {r.door_code_2}</div>}
+                  {(r.door_code_2 || r.flats?.door_code) && <div className="text-[10px] text-slate-400">W: {r.door_code_2 || r.flats?.door_code}</div>}
                 </td>
                 <td className="p-3 text-slate-500 text-xs">📶 {r.wifi_ssid||"—"}</td>
                 <td className="p-3 text-xs">{(()=>{const a=batAge(r.door_battery_changed_at);const od=a!=null&&a>180;return r.door_battery_changed_at?<span className={od?"text-rose-600 font-semibold":"text-slate-500"} title="Türschloss-Akku zuletzt gewechselt">🔋 {fmtShort(r.door_battery_changed_at)}{od?" · fällig":""}</span>:<span className="text-slate-300" title="Kein Türakku-Wechsel notiert">🔋 —</span>;})()}{Array.isArray(r.photos)&&r.photos.length?<span className="ml-2 text-slate-400" title="Fotos">📷 {r.photos.length}</span>:null}</td>
@@ -674,7 +678,7 @@ function Rooms({bump}) {
           </table>
         </Card>))}
       {relocate&&<RelocateForm room={relocate} rooms={rows} reservations={resByRoom[relocate.id]} onRelocate={handleRelocate} onClose={()=>setRelocate(null)}/>}
-      {edit&&<RoomForm rec={edit==="new"?null:edit} objekte={objekte||[]} onSave={save} onClose={()=>setEdit(null)}/>}
+      {edit&&<RoomForm rec={edit==="new"?null:edit} objekte={objekte||[]} flats={flats||[]} onSave={save} onClose={()=>setEdit(null)}/>}
     </div>
   );
 }
@@ -748,10 +752,11 @@ function RelocateForm({room, rooms, reservations, onRelocate, onClose}) {
     </Modal>
   );
 }
-function RoomForm({rec,objekte,onSave,onClose}) {
+function RoomForm({rec,objekte,flats,onSave,onClose}) {
   const [f,setF]=useState({ room_number:rec?.room_number||"", objekt_id:rec?.objekt_id||"", capacity:rec?.capacity||1, status:rec?.status||"ready",
     door_code:rec?.door_code||"", door_code_2:rec?.door_code_2||"", house_door_code:rec?.house_door_code||"", wifi_ssid:rec?.wifi_ssid||"", wifi_password:rec?.wifi_password||"",
-    photos:Array.isArray(rec?.photos)?rec.photos:[], intro_video_url:rec?.intro_video_url||"", door_battery_changed_at:rec?.door_battery_changed_at||"" });
+    photos:Array.isArray(rec?.photos)?rec.photos:[], intro_video_url:rec?.intro_video_url||"", door_battery_changed_at:rec?.door_battery_changed_at||"",
+    flat_id:rec?.flat_id||"" });
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
   const [busy,setBusy]=useState(false);
   const uploadPhotos=async(files)=>{ if(!files||!files.length)return; setBusy(true); try{
@@ -773,6 +778,14 @@ function RoomForm({rec,objekte,onSave,onClose}) {
           <option value="">—</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code}</option>)}</select></Field>
         <Field label="Kapazität"><input type="number" min="1" className={inputCls} value={f.capacity} onChange={e=>u("capacity",e.target.value)}/></Field>
       </div>
+      <Field label="Wohnung (Apartment) – optional">
+        <select className={inputCls} value={f.flat_id} onChange={e=>u("flat_id",e.target.value)}>
+          <option value="">— Keine Wohnung (Zimmer einzeln) —</option>
+          {(flats||[]).filter(flat => flat.objekt_id === f.objekt_id).map(flat => (
+            <option key={flat.id} value={flat.id}>{flat.name}</option>
+          ))}
+        </select>
+      </Field>
       <div className="grid grid-cols-3 gap-3">
         <Field label="Zimmer-Türcode"><input className={inputCls} value={f.door_code} onChange={e=>u("door_code",e.target.value)}/></Field>
         <Field label="Nuki Code 2 (Wohnungstür)"><input className={inputCls} value={f.door_code_2} onChange={e=>u("door_code_2",e.target.value)}/></Field>
@@ -808,6 +821,281 @@ function RoomForm({rec,objekte,onSave,onClose}) {
       </Field>
       <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn><Btn kind="ok" onClick={()=>{if(!f.room_number)return toast("Bezeichnung nötig","err");onSave(f);}}>Speichern</Btn></div>
     </Modal>
+  );
+}
+
+/* ============================ HÄUSER & WOHNUNGEN ============================ */
+function FlatForm({rec, rooms, onSave, onClose}) {
+  const [f, setF] = useState({
+    name: rec?.name || "",
+    objekt_id: rec?.objekt_id || "",
+    door_code: rec?.door_code || "",
+    wifi_ssid: rec?.wifi_ssid || "",
+    wifi_password: rec?.wifi_password || ""
+  });
+  const [assignedRoomIds, setAssignedRoomIds] = useState([]);
+
+  useEffect(() => {
+    if (rec?.id) {
+      setAssignedRoomIds(rooms.filter(r => r.flat_id === rec.id).map(r => r.id));
+    } else {
+      setAssignedRoomIds([]);
+    }
+  }, [rec, rooms]);
+
+  const u = (k, v) => setF(s => ({...s, [k]: v}));
+
+  const handleToggleRoom = (roomId) => {
+    setAssignedRoomIds(ids =>
+      ids.includes(roomId) ? ids.filter(id => id !== roomId) : [...ids, roomId]
+    );
+  };
+
+  const handleSave = async () => {
+    if (!f.name) return toast("Name der Wohnung nötig", "err");
+    try {
+      let flatId = rec?.id;
+      const p = {
+        name: f.name,
+        objekt_id: f.objekt_id,
+        door_code: f.door_code || null,
+        wifi_ssid: f.wifi_ssid || null,
+        wifi_password: f.wifi_password || null,
+        updated_at: new Date().toISOString()
+      };
+
+      if (!flatId) {
+        const { data, error } = await sb.from("flats").insert(p).select("id").single();
+        if (error) throw error;
+        flatId = data.id;
+      } else {
+        const { error } = await sb.from("flats").update(p).eq("id", flatId);
+        if (error) throw error;
+      }
+
+      const roomsToUnassign = rooms.filter(r => r.flat_id === flatId && !assignedRoomIds.includes(r.id));
+      if (roomsToUnassign.length > 0) {
+        const { error } = await sb.from("rooms").update({ flat_id: null }).in("id", roomsToUnassign.map(r => r.id));
+        if (error) throw error;
+      }
+
+      const roomsToAssign = rooms.filter(r => assignedRoomIds.includes(r.id));
+      if (roomsToAssign.length > 0) {
+        const { error } = await sb.from("rooms").update({ flat_id: flatId }).in("id", roomsToAssign.map(r => r.id));
+        if (error) throw error;
+      }
+
+      toast("Wohnung & Zimmerzuordnungen gespeichert");
+      onSave();
+    } catch (e) {
+      err(e);
+    }
+  };
+
+  return (
+    <Modal title={rec?.id ? `Wohnung editieren: ${rec.name}` : "Neue Wohnung anlegen"} onClose={onClose}>
+      <div className="space-y-4">
+        <Field label="Name der Wohnung *">
+          <input className={inputCls} value={f.name} onChange={e=>u("name", e.target.value)} placeholder="z.B. Wohnung 1, EG links"/>
+        </Field>
+        
+        <Field label="Nuki Code (Wohnungstür)">
+          <input className={inputCls} value={f.door_code} onChange={e=>u("door_code", e.target.value)} placeholder="z.B. 123456"/>
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="WLAN (SSID) – optionaler Override">
+            <input className={inputCls} value={f.wifi_ssid} onChange={e=>u("wifi_ssid", e.target.value)} placeholder="Wohnungs-WLAN"/>
+          </Field>
+          <Field label="WLAN-Passwort">
+            <input className={inputCls} value={f.wifi_password} onChange={e=>u("wifi_password", e.target.value)}/>
+          </Field>
+        </div>
+
+        <div>
+          <span className="text-xs text-slate-500 font-semibold block mb-2 uppercase">Zimmer zuordnen</span>
+          <div className="border border-slate-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-2">
+            {rooms.map(r => {
+              const isChecked = assignedRoomIds.includes(r.id);
+              return (
+                <label key={r.id} className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer hover:bg-slate-50 p-1 rounded">
+                  <input type="checkbox" checked={isChecked} onChange={()=>handleToggleRoom(r.id)} className="w-4 h-4 accent-blue-600"/>
+                  Zimmer {r.room_number} {r.flats && r.flat_id !== rec?.id ? `(aktuell in: ${r.flats.name})` : ""}
+                </label>
+              );
+            })}
+            {!rooms.length && <div className="text-xs text-slate-400 text-center">Keine Zimmer in diesem Haus vorhanden.</div>}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
+          <Btn kind="ok" onClick={handleSave}>Speichern</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function HousesView({bump}) {
+  const [objekte, reloadObj] = useList(loaders.objekte, [bump]);
+  const [flats, reloadFlats] = useList(loaders.flats, [bump]);
+  const [rooms, reloadRooms] = useList(loaders.rooms, [bump]);
+  const [nuki] = useList(loaders.nuki, [bump]);
+  const [hEdit, setHEdit] = useState(null);
+  const [fEdit, setFEdit] = useState(null);
+  const [activeObjId, setActiveObjId] = useState(null);
+
+  if (!objekte || !flats || !rooms || !nuki) return <Skeleton />;
+
+  const saveHouse = async (f) => {
+    try {
+      const p = {
+        code: f.code,
+        name: f.name || null,
+        address: f.address || null,
+        wifi_ssid: f.wifi_ssid || null,
+        wifi_password: f.wifi_password || null,
+        description: f.description || null,
+        google_review_url: f.google_review_url || null,
+        inspection_items: Array.isArray(f.inspection_items) ? f.inspection_items : [],
+        cleaning_checklist: Array.isArray(f.cleaning_checklist) ? f.cleaning_checklist : [],
+        updated_at: new Date().toISOString()
+      };
+      if (hEdit === "new") {
+        const { error } = await sb.from("cleaning_objekte").insert(p);
+        if (error) throw error;
+        toast("Haus angelegt");
+      } else {
+        const { error } = await sb.from("cleaning_objekte").update(p).eq("id", hEdit.id);
+        if (error) throw error;
+        toast("Haus gespeichert");
+      }
+      setHEdit(null);
+      reloadObj();
+    } catch (e) {
+      err(e);
+    }
+  };
+
+  const deleteFlat = async (f) => {
+    if (!confirm(`Wohnung ${f.name} wirklich löschen?`)) return;
+    const { error } = await sb.from("flats").delete().eq("id", f.id);
+    if (error) return err(error);
+    toast("Wohnung gelöscht");
+    reloadFlats();
+    reloadRooms();
+  };
+
+  const handleAddFlatClick = (objektId) => {
+    setActiveObjId(objektId);
+    setFEdit("new");
+  };
+
+  return (
+    <div className="space-y-6">
+      <PageHead title="Häuser & Wohnungen" sub="Objektverwaltung und Zimmerzuordnungen." right={<Btn onClick={() => setHEdit("new")} size="lg">+ Haus</Btn>}/>
+      
+      <div className="space-y-6">
+        {objekte.map(o => {
+          const houseFlats = flats.filter(f => f.objekt_id === o.id);
+          const houseRooms = rooms.filter(r => r.objekt_id === o.id);
+          const unassignedRooms = houseRooms.filter(r => !r.flat_id);
+          const lock = nuki.find(n => (n.lock_name || "").toLowerCase().includes((o.code || "").toLowerCase()));
+
+          return (
+            <Card key={o.id} className="p-6">
+              <div className="flex items-start justify-between border-b border-slate-100 pb-4 mb-4 flex-wrap gap-2">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                    🏠 {o.code} <span className="text-sm font-normal text-slate-500">({o.name || "Kein Name"})</span>
+                    {lock && <span>🔋 <Battery v={lock.battery_charge}/></span>}
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-1">{o.address || "Keine Adresse hinterlegt"}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Btn size="sm" kind="primary" onClick={() => handleAddFlatClick(o.id)}>+ Wohnung</Btn>
+                  <Btn size="sm" kind="soft" onClick={() => setHEdit(o)}>Bearbeiten</Btn>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-4 mb-4">
+                <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-600">
+                  <div className="font-semibold text-slate-500 uppercase mb-1">Haus-WLAN</div>
+                  <div>SSID: <span className="font-mono text-slate-800 font-semibold">{o.wifi_ssid || "—"}</span></div>
+                  <div className="mt-1">Passwort: <span className="font-mono text-slate-800">{o.wifi_password || "—"}</span></div>
+                </div>
+                <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-600">
+                  <div className="font-semibold text-slate-500 uppercase mb-1">Details</div>
+                  <div>Bereiche: <span className="font-semibold text-slate-800">{Array.isArray(o.inspection_items) ? o.inspection_items.length : 0}</span></div>
+                  <div className="mt-1">Checkliste: <span className="font-semibold text-slate-800">{Array.isArray(o.cleaning_checklist) ? o.cleaning_checklist.length : 0} Punkte</span></div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider">Flats (Wohnungen)</h3>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {houseFlats.map(flat => {
+                    const flatRooms = houseRooms.filter(r => r.flat_id === flat.id);
+                    return (
+                      <div key={flat.id} className="border border-slate-200 rounded-xl p-3 flex flex-col justify-between hover:border-slate-300 transition-colors">
+                        <div>
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-bold text-slate-800 text-sm">{flat.name}</span>
+                            <div className="flex gap-1">
+                              <button onClick={() => setFEdit(flat)} title="Bearbeiten" className="text-slate-400 hover:text-blue-600 text-xs">✏️</button>
+                              <button onClick={() => deleteFlat(flat)} title="Löschen" className="text-slate-400 hover:text-rose-600 text-xs">🗑</button>
+                            </div>
+                          </div>
+                          
+                          <div className="text-xs text-slate-500 space-y-0.5">
+                            <div>🔑 Nuki: <span className="font-mono font-semibold text-amber-700">{flat.door_code || "—"}</span></div>
+                            {flat.wifi_ssid && <div>📶 WiFi: <span className="font-mono">{flat.wifi_ssid}</span></div>}
+                          </div>
+
+                          <div className="mt-3">
+                            <div className="text-[10px] text-slate-400 font-semibold uppercase mb-1">Zimmer:</div>
+                            <div className="flex flex-wrap gap-1">
+                              {flatRooms.map(r => (
+                                <span key={r.id} className="text-[11px] font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-100">
+                                  {r.room_number}
+                                </span>
+                              ))}
+                              {!flatRooms.length && <span className="text-[11px] text-slate-400 italic">Keine Zimmer zugeordnet</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {!houseFlats.length && (
+                    <div className="col-span-full border border-dashed border-slate-200 rounded-xl p-4 text-center text-xs text-slate-400">
+                      Keine Wohnungen für dieses Haus angelegt. Klicken Sie auf "+ Wohnung" zum Erstellen.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {unassignedRooms.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-slate-100">
+                  <div className="text-xs font-bold text-rose-600 uppercase mb-1.5">⚠️ Zimmer ohne Wohnung ({unassignedRooms.length})</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {unassignedRooms.map(r => (
+                      <span key={r.id} className="text-xs bg-rose-50 text-rose-700 px-2.5 py-0.5 rounded border border-rose-100 font-medium">
+                        {r.room_number}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+
+      {hEdit && <HouseForm rec={hEdit === "new" ? null : hEdit} onSave={saveHouse} onClose={() => setHEdit(null)} />}
+      {fEdit && <FlatForm rec={fEdit === "new" ? { objekt_id: activeObjId } : fEdit} rooms={rooms.filter(r => r.objekt_id === (fEdit.objekt_id || activeObjId))} onSave={() => { reloadFlats(); reloadRooms(); setFEdit(null); }} onClose={() => setFEdit(null)} />}
+    </div>
   );
 }
 
@@ -901,7 +1189,6 @@ function Cleaning({bump}) {
   const [rooms]=useList(loaders.rooms,[bump]);
   const [res]=useList(loaders.reservations,[bump]);
   const [nuki]=useList(loaders.nuki,[bump]);
-  const [hEdit,setHEdit]=useState(null);
   const [newOrder,setNewOrder]=useState(false);
   const [repView,setRepView]=useState(null);
   const cleanLink=(t)=>(typeof window!=="undefined"?window.location.origin:"")+"/?clean="+t;
@@ -916,10 +1203,6 @@ function Cleaning({bump}) {
     if(error)return err(error); toast("Freigegeben – jetzt an Oxana senden"); reloadO(); };
   const pendingOrders=orders.filter(o=>!o.approved_at);
   const approvedOrders=orders.filter(o=>o.approved_at);
-  const saveHouse=async(f)=>{ try{ const p={code:f.code,name:f.name||null,address:f.address||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,description:f.description||null,google_review_url:f.google_review_url||null,inspection_items:Array.isArray(f.inspection_items)?f.inspection_items:[],cleaning_checklist:Array.isArray(f.cleaning_checklist)?f.cleaning_checklist:[],updated_at:new Date().toISOString()};
-    if(hEdit==="new"){ const {error}=await sb.from("cleaning_objekte").insert(p); if(error)throw error; toast("Haus angelegt"); }
-    else { const {error}=await sb.from("cleaning_objekte").update(p).eq("id",hEdit.id); if(error)throw error; toast("Haus gespeichert"); }
-    setHEdit(null); reloadObj(); }catch(e){err(e);} };
   return (
     <div className="space-y-6">
       <PageHead title="Reinigung & Häuser" sub="Live aus Supabase."/>
@@ -997,15 +1280,6 @@ function Cleaning({bump}) {
             </div>
           </div>);})}</div>
       </Card>
-      <Card className="p-5">
-        <div className="flex items-center justify-between mb-3"><h2 className="font-semibold text-slate-800">🏠 Häuser verwalten & Akkus</h2><Btn size="sm" onClick={()=>setHEdit("new")}>+ Haus</Btn></div>
-        <div className="grid sm:grid-cols-2 gap-3">{objekte.map(o=>{const lock=nuki.find(n=>(n.lock_name||"").toLowerCase().includes((o.code||"").toLowerCase()));return(
-          <div key={o.id} className="border border-slate-200 rounded-xl px-4 py-3">
-            <div className="flex items-start justify-between gap-2"><div><div className="font-medium text-slate-800">{o.code}</div><div className="text-xs text-slate-400">{o.name||"—"}{o.address?` · ${o.address}`:""}</div></div><IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setHEdit(o)}>✏️</IconBtn></div>
-            <div className="text-xs text-slate-500 mt-1">📶 {o.wifi_ssid||"—"}{lock?<span> · 🔋 <Battery v={lock.battery_charge}/> {lock.lock_name}</span>:null}</div>
-          </div>);})}</div>
-      </Card>
-      {hEdit&&<HouseForm rec={hEdit==="new"?null:hEdit} onSave={saveHouse} onClose={()=>setHEdit(null)}/>}
       {newOrder&&<CleaningOrderForm objekte={objekte} rooms={rooms} res={res} cleanLink={cleanLink} onClose={()=>setNewOrder(false)} onCreated={reloadO}/>}
       {repView&&<ReportDetail report={repView} onClose={()=>setRepView(null)}/>}
     </div>
@@ -1442,7 +1716,10 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
       await sb.rpc("update_reservation_checkin",{p_code:booking.code,p_language:glang,p_persons:persons,p_is_used:true});
       if(dup){ setDupWarn(true); sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:"ID-Vorprüfung",message:"Mögliche Doppel-Ausweise beim Check-in (gleiche Bildgröße) – bitte im Admin prüfen."}).then(()=>{},()=>{}); }
       const link=(typeof window!=="undefined"?window.location.origin:"")+"/?code="+booking.code;
-      sendMail("checkin_confirmation",(people[0].email||"").trim(),glang,{guestName:people[0].name||booking.guest_name||"Gast",roomNumber:room.room_number||"",doorCode:room.door_code + (room.door_code_2 ? " (Zimmer) · Wohnungstür-Code: " + room.door_code_2 : ""),houseDoorCode:room.house_door_code||"",reservationCode:booking.code,checkInDate:booking.check_in_date||"",checkOutDate:booking.check_out_date||"",houseAddress:[room.cleaning_objekte?.name,room.cleaning_objekte?.address].filter(Boolean).join(" · "),wifiSsid:room.wifi_ssid||"",wifiPassword:room.wifi_password||"",youtubeDoorLink:room.intro_video_url||room.youtube_door_link||"",checkoutLink:link,extensionLink:link});
+      const resolvedDoorCode2 = room.flats?.door_code || room.door_code_2 || "";
+      const resolvedWifiSsid = room.wifi_ssid || room.flats?.wifi_ssid || "";
+      const resolvedWifiPassword = room.wifi_password || room.flats?.wifi_password || "";
+      sendMail("checkin_confirmation",(people[0].email||"").trim(),glang,{guestName:people[0].name||booking.guest_name||"Gast",roomNumber:room.room_number||"",doorCode:room.door_code + (resolvedDoorCode2 ? " (Zimmer) · Wohnungstür-Code: " + resolvedDoorCode2 : ""),houseDoorCode:room.house_door_code||"",reservationCode:booking.code,checkInDate:booking.check_in_date||"",checkOutDate:booking.check_out_date||"",houseAddress:[room.cleaning_objekte?.name,room.cleaning_objekte?.address].filter(Boolean).join(" · "),wifiSsid:resolvedWifiSsid,wifiPassword:resolvedWifiPassword,youtubeDoorLink:room.intro_video_url||room.youtube_door_link||"",checkoutLink:link,extensionLink:link});
       setStep(5);
     }catch(e){ err(e); }
     setBusy(false);
@@ -1514,9 +1791,12 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
     <div className="grid grid-cols-2 gap-3 text-sm">
       <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Haustür-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
       <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">Zimmer-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
+      {(room.door_code_2 || room.flats?.door_code) && (
+        <div className="bg-slate-50 rounded-xl p-3 col-span-2"><div className="text-xs text-slate-400">Wohnungstür-Code</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code_2 || room.flats?.door_code}</div></div>
+      )}
       <div className="bg-slate-50 rounded-xl p-3 col-span-2"><div className="text-xs text-slate-400">Adresse</div><div className="font-semibold text-slate-800">{houseName}{addr?(houseName?" · ":"")+addr:""||"—"}</div></div>
-      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
-      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">{room.wifi_password||"—"}</div></div>
+      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||room.flats?.wifi_ssid||"—"}</div></div>
+      <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN-Passwort</div><div className="font-mono text-slate-800">{room.wifi_password||room.flats?.wifi_password||"—"}</div></div>
     </div>
     {room.intro_video_url&&<a href={room.intro_video_url} target="_blank" rel="noreferrer" className="block text-center bg-slate-900 text-white rounded-xl py-3 text-sm font-semibold">▶ Wie komme ich in mein Zimmer?</a>}
     <div className="rounded-xl border border-slate-200 p-3 text-center">
@@ -1548,8 +1828,15 @@ function Guest({onAdmin,initialCode}) {
   const lookup=async()=>{ if(!code.trim())return; setBusy(true);
     const {data,error}=await sb.rpc("get_checkin_reservation",{p_code:code.trim().toUpperCase()});
     setBusy(false);
-    if(error||!data||data.error){ toast("Code nicht gefunden","err"); return; }
+    if(error||!data||data.error){ setBusy(false); toast("Code nicht gefunden","err"); return; }
     const resv=data.reservation||{}; resv.rooms={...(data.room||{}), cleaning_objekte:data.objekt||{}};
+    if (resv.rooms.flat_id) {
+      try {
+        const { data: flatData } = await sb.from("flats").select("*").eq("id", resv.rooms.flat_id).maybeSingle();
+        if (flatData) resv.rooms.flats = flatData;
+      } catch (e) { console.warn(e); }
+    }
+    setBusy(false);
     setBooking(resv); setGlang(resv.preferred_language||"de"); setCheckedIn(!!data.has_checkin); };
   useEffect(()=>{ if(initialCode&&initialCode.trim()) lookup(); },[]);
   const evaluate=(follow)=>{ setPhase("evaluating"); setTimeout(()=>{ const d={};ELEMENTS.forEach(e=>d[e]=true);
@@ -1666,8 +1953,11 @@ function Guest({onAdmin,initialCode}) {
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("Haustür-Code","House door code")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.house_door_code||"—"}</div></div>
               <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("Zimmer-Code","Room code")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code||"—"}</div></div>
-              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||"—"}</div></div>
-              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("WLAN-Passwort","WiFi password")}</div><div className="font-mono text-slate-800 break-all">{room.wifi_password||"—"}</div></div>
+              {(room.door_code_2 || room.flats?.door_code) && (
+                <div className="bg-slate-50 rounded-xl p-3 col-span-2"><div className="text-xs text-slate-400">{L("Wohnungstür-Code","Flat door code")}</div><div className="font-mono text-lg font-bold text-slate-800">{room.door_code_2 || room.flats?.door_code}</div></div>
+              )}
+              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">WLAN</div><div className="font-semibold text-slate-800">{room.wifi_ssid||room.flats?.wifi_ssid||"—"}</div></div>
+              <div className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400">{L("WLAN-Passwort","WiFi password")}</div><div className="font-mono text-slate-800 break-all">{room.wifi_password||room.flats?.wifi_password||"—"}</div></div>
             </div>
             <div className="flex flex-col items-center my-1"><div className="w-px h-5 border-l-2 border-dashed border-slate-300"></div><div className="text-[11px] text-slate-400">↓ {L("So findest du dein Zimmer","How to find your room")}</div></div>
             {(room.intro_video_url||room.youtube_door_link)
@@ -2252,7 +2542,7 @@ function Pricing({bump}){
   </div>);
 }
 
-const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["checkins","Check-ins","🪪"],["anm","Anmeldungen","📋"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["price","Pricing","🏷"],["acct","Rechnungswesen","🧾"],["msg","Gästekommunikation","💬"],["set","Einstellungen","⚙️"]];
+const NAV=[["over","Cockpit","📊"],["res","Reservierungen","📅"],["rooms","Zimmer","🛏"],["houses","Häuser","🏠"],["checkins","Check-ins","🪪"],["anm","Anmeldungen","📋"],["ext","Verlängerungen","📩"],["clean","Reinigung","🧹"],["occ","Auslastung","💶"],["price","Pricing","🏷"],["acct","Rechnungswesen","🧾"],["msg","Gästekommunikation","💬"],["set","Einstellungen","⚙️"]];
 function Admin({session}) {
   const [view,setView]=useState("over");
   const [bump,setBump]=useState(0);
@@ -2260,7 +2550,7 @@ function Admin({session}) {
   const email=session.user?.email||"";
   const logout=()=>sb.auth.signOut();
   const refresh=()=>{ setBump(b=>b+1); toast("Aktualisiert"); };
-  const Body={over:<Cockpit go={go} bump={bump}/>,res:<Reservations bump={bump}/>,rooms:<Rooms bump={bump}/>,checkins:<CheckIns bump={bump}/>,
+  const Body={over:<Cockpit go={go} bump={bump}/>,res:<Reservations bump={bump}/>,rooms:<Rooms bump={bump}/>,houses:<HousesView bump={bump}/>,checkins:<CheckIns bump={bump}/>,
     anm:<Anmeldungen bump={bump}/>,ext:<Extensions bump={bump}/>,clean:<Cleaning bump={bump}/>,occ:<Occupancy bump={bump}/>,price:<Pricing bump={bump}/>,acct:<Accounting bump={bump}/>,msg:<Gaestekommunikation bump={bump}/>,set:<SettingsView onLogout={logout} email={email} bump={bump}/>}[view];
   return (
     <div className="min-h-screen">
