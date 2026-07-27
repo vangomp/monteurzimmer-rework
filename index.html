@@ -517,6 +517,7 @@ function Rooms({bump}) {
   const [objekte]=useList(loaders.objekte,[bump]);
   const [res,reloadRes]=useList(loaders.reservations,[bump]);
   const [edit,setEdit]=useState(null);
+  const [relocate,setRelocate]=useState(null);
   if(!rows || !objekte || !res) return <Skeleton/>;
   const resByRoom={}; (res||[]).forEach(r=>{ if(!r.room_id||r.archived_at) return; (resByRoom[r.room_id]=resByRoom[r.room_id]||[]).push(r); });
   const occupant=(id)=>{ const l=resByRoom[id]; if(!l||!l.length) return null;
@@ -570,11 +571,67 @@ function Rooms({bump}) {
     reload();
     reloadRes();
   };
+  const handleRelocate=async(activeOcc, targetRoom, sendEmail)=>{
+    try {
+      const { error: resErr } = await sb.from("reservations").update({ room_id: targetRoom.id }).eq("id", activeOcc.id);
+      if (resErr) throw resErr;
+
+      const { error: srcErr } = await sb.from("rooms").update({ status: "dirty" }).eq("id", relocate.id);
+      if (srcErr) throw srcErr;
+
+      const { error: tgtErr } = await sb.from("rooms").update({ status: "occupied" }).eq("id", targetRoom.id);
+      if (tgtErr) throw tgtErr;
+
+      if (sendEmail) {
+        const { data: ciData, error: ciErr } = await sb.from("check_ins").select("email, full_name").eq("reservation_id", activeOcc.id).order("checked_in_at", { ascending: true }).limit(1);
+        let guestEmail = "";
+        let guestName = activeOcc.guest_name || "Gast";
+        if (!ciErr && ciData && ciData.length > 0) {
+          guestEmail = ciData[0].email;
+          if (ciData[0].full_name) {
+            guestName = ciData[0].full_name;
+          }
+        }
+        
+        if (guestEmail) {
+          const link = (typeof window !== "undefined" ? window.location.origin : "") + "/?code=" + activeOcc.code;
+          const doorCodeText = targetRoom.door_code + (targetRoom.door_code_2 ? " (Zimmer) · Wohnungstür-Code: " + targetRoom.door_code_2 : "");
+          
+          await sendMail("checkin_confirmation", guestEmail.trim(), activeOcc.preferred_language || "de", {
+            guestName: guestName,
+            roomNumber: targetRoom.room_number || "",
+            doorCode: doorCodeText,
+            houseDoorCode: targetRoom.house_door_code || "",
+            reservationCode: activeOcc.code,
+            checkInDate: activeOcc.check_in_date || "",
+            checkOutDate: activeOcc.check_out_date || "",
+            houseAddress: [targetRoom.cleaning_objekte?.name, targetRoom.cleaning_objekte?.address].filter(Boolean).join(" · "),
+            wifiSsid: targetRoom.wifi_ssid || "",
+            wifiPassword: targetRoom.wifi_password || "",
+            youtubeDoorLink: targetRoom.intro_video_url || targetRoom.youtube_door_link || "",
+            checkoutLink: link,
+            extensionLink: link
+          });
+          toast("Umzug abgeschlossen & E-Mail gesendet");
+        } else {
+          toast("Umzug abgeschlossen (keine E-Mail-Adresse für diesen Gast gefunden)");
+        }
+      } else {
+        toast("Umzug abgeschlossen");
+      }
+
+      setRelocate(null);
+      reload();
+      reloadRes();
+    } catch (e) {
+      err(e);
+    }
+  };
   const batteryChanged=async(r)=>{ if(!confirm(`Türschloss-Akku von ${r.room_number} heute gewechselt?`))return; const {error}=await sb.from("rooms").update({door_battery_changed_at:new Date().toISOString().slice(0,10)}).eq("id",r.id); if(error)return err(error); toast("Türakku-Wechsel notiert"); reload(); };
   const batAge=(d)=> d?Math.floor((Date.now()-new Date(d))/86400000):null;
   const save=async(f)=>{ try{
     const p={room_number:f.room_number,objekt_id:f.objekt_id||null,capacity:Number(f.capacity)||1,status:f.status,
-      door_code:f.door_code||null,house_door_code:f.house_door_code||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,
+      door_code:f.door_code||null,door_code_2:f.door_code_2||null,house_door_code:f.house_door_code||null,wifi_ssid:f.wifi_ssid||null,wifi_password:f.wifi_password||null,
       photos:f.photos||[],intro_video_url:f.intro_video_url||null,door_battery_changed_at:f.door_battery_changed_at||null};
     if(edit==="new"){ const {error}=await sb.from("rooms").insert(p); if(error)throw error; toast("Zimmer angelegt"); }
     else { const {error}=await sb.from("rooms").update(p).eq("id",edit.id); if(error)throw error; toast("Gespeichert"); }
@@ -594,14 +651,20 @@ function Rooms({bump}) {
               <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50">
                 <td className="p-3"><div className="font-semibold text-slate-800">{r.room_number}</div>{(()=>{const o=occupant(r.id);return o?<div className="text-xs font-medium text-blue-700">🏢 {o.guest_name||o.code} <span className={"font-normal "+(daysFromToday(o.check_out_date)<0?"text-rose-500":"text-slate-400")}>bis {fmtShort(o.check_out_date)}</span></div>:(r.status==="occupied"?<div className="text-xs text-slate-400">belegt · keine Buchung zugeordnet</div>:null);})()}</td>
                 <td className="p-3 text-slate-500 text-xs">👤 {r.capacity}</td>
-                <td className="p-3 font-mono text-amber-700 text-xs">{r.door_code||"—"}</td>
+                <td className="p-3 font-mono text-amber-700 text-xs">
+                  <div>Z: {r.door_code||"—"}</div>
+                  {r.door_code_2 && <div className="text-[10px] text-slate-400">W: {r.door_code_2}</div>}
+                </td>
                 <td className="p-3 text-slate-500 text-xs">📶 {r.wifi_ssid||"—"}</td>
                 <td className="p-3 text-xs">{(()=>{const a=batAge(r.door_battery_changed_at);const od=a!=null&&a>180;return r.door_battery_changed_at?<span className={od?"text-rose-600 font-semibold":"text-slate-500"} title="Türschloss-Akku zuletzt gewechselt">🔋 {fmtShort(r.door_battery_changed_at)}{od?" · fällig":""}</span>:<span className="text-slate-300" title="Kein Türakku-Wechsel notiert">🔋 —</span>;})()}{Array.isArray(r.photos)&&r.photos.length?<span className="ml-2 text-slate-400" title="Fotos">📷 {r.photos.length}</span>:null}</td>
                 <td className="p-3"><select value={r.status} onChange={e=>setStatus(r,e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1 text-xs">
                   <option value="occupied">Belegt</option><option value="dirty">Ausgezogen, dreckig</option><option value="ready">Gereinigt, bereit</option><option value="maintenance">Wartung</option></select></td>
                 <td className="p-3 text-right whitespace-nowrap">
                   {resByRoom[r.id]?.some(o=>daysFromToday(o.check_in_date)<=0&&daysFromToday(o.check_out_date)>=0) && (
-                    <IconBtn title="Zimmer freigeben (auschecken)" color="text-rose-600" onClick={()=>checkoutRoom(r)}>🚪</IconBtn>
+                    <React.Fragment>
+                      <IconBtn title="Firma/Gast in ein anderes Zimmer umziehen" color="text-blue-600" onClick={()=>setRelocate(r)}>🔄</IconBtn>
+                      <IconBtn title="Zimmer freigeben (auschecken)" color="text-rose-600" onClick={()=>checkoutRoom(r)}>🚪</IconBtn>
+                    </React.Fragment>
                   )}
                   <IconBtn title="Türakku heute gewechselt" color="text-emerald-600" onClick={()=>batteryChanged(r)}>🔋</IconBtn>
                   <IconBtn title="Bearbeiten" color="text-blue-600" onClick={()=>setEdit(r)}>✏️</IconBtn>
@@ -610,13 +673,84 @@ function Rooms({bump}) {
               </tr>);})}</tbody>
           </table>
         </Card>))}
+      {relocate&&<RelocateForm room={relocate} rooms={rows} reservations={resByRoom[relocate.id]} onRelocate={handleRelocate} onClose={()=>setRelocate(null)}/>}
       {edit&&<RoomForm rec={edit==="new"?null:edit} objekte={objekte||[]} onSave={save} onClose={()=>setEdit(null)}/>}
     </div>
   );
 }
+function RelocateForm({room, rooms, reservations, onRelocate, onClose}) {
+  const activeOcc = reservations?.find(o=>daysFromToday(o.check_in_date)<=0&&daysFromToday(o.check_out_date)>=0);
+  const [targetRoomId, setTargetRoomId] = useState("");
+  const [sendEmail, setSendEmail] = useState(false);
+
+  const eligibleRooms = useMemo(() => {
+    return rooms
+      .filter(r => r.id !== room.id)
+      .sort((a, b) => {
+        const isReadyA = a.status === "ready" || a.status === "available";
+        const isReadyB = b.status === "ready" || b.status === "available";
+        if (isReadyA && !isReadyB) return -1;
+        if (!isReadyA && isReadyB) return 1;
+        return a.room_number.localeCompare(b.room_number);
+      });
+  }, [rooms, room.id]);
+
+  const targetRoom = rooms.find(r => r.id === targetRoomId);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!activeOcc) return toast("Keine aktive Reservierung zum Umziehen gefunden", "err");
+    if (!targetRoomId) return toast("Bitte wählen Sie ein Zielzimmer aus", "err");
+    onRelocate(activeOcc, targetRoom, sendEmail);
+  };
+
+  const statusLabel = (s) => {
+    return {
+      occupied: "Belegt",
+      dirty: "Ausgezogen, dreckig",
+      ready: "Gereinigt, bereit",
+      available: "Gereinigt, bereit",
+      maintenance: "Wartung"
+    }[s] || s;
+  };
+
+  return (
+    <Modal title={`Zimmer umziehen: Zimmer ${room.room_number}`} onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <span className="text-xs text-slate-500">Aktueller Gast / Firma</span>
+          <div className="font-semibold text-slate-800 p-2 bg-slate-50 rounded-lg mt-1">
+            {activeOcc ? `${activeOcc.guest_name || activeOcc.code} (bis ${fmt(activeOcc.check_out_date)})` : "Kein aktiver Gast"}
+          </div>
+        </div>
+
+        <Field label="Ziel-Zimmer">
+          <select className={inputCls} value={targetRoomId} onChange={e=>setTargetRoomId(e.target.value)}>
+            <option value="">— Bitte Zimmer wählen —</option>
+            {eligibleRooms.map(r => (
+              <option key={r.id} value={r.id}>
+                {r.room_number} ({statusLabel(r.status)})
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer py-1">
+          <input type="checkbox" checked={sendEmail} onChange={e=>setSendEmail(e.target.checked)} className="w-4 h-4 accent-blue-600"/>
+          Neue E-Mail mit Logindaten an Gast senden
+        </label>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
+          <Btn kind="primary" type="submit" disabled={!targetRoomId}>Umziehen</Btn>
+        </div>
+      </form>
+    </Modal>
+  );
+}
 function RoomForm({rec,objekte,onSave,onClose}) {
   const [f,setF]=useState({ room_number:rec?.room_number||"", objekt_id:rec?.objekt_id||"", capacity:rec?.capacity||1, status:rec?.status||"ready",
-    door_code:rec?.door_code||"", house_door_code:rec?.house_door_code||"", wifi_ssid:rec?.wifi_ssid||"", wifi_password:rec?.wifi_password||"",
+    door_code:rec?.door_code||"", door_code_2:rec?.door_code_2||"", house_door_code:rec?.house_door_code||"", wifi_ssid:rec?.wifi_ssid||"", wifi_password:rec?.wifi_password||"",
     photos:Array.isArray(rec?.photos)?rec.photos:[], intro_video_url:rec?.intro_video_url||"", door_battery_changed_at:rec?.door_battery_changed_at||"" });
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
   const [busy,setBusy]=useState(false);
@@ -639,8 +773,9 @@ function RoomForm({rec,objekte,onSave,onClose}) {
           <option value="">—</option>{objekte.map(o=><option key={o.id} value={o.id}>{o.code}</option>)}</select></Field>
         <Field label="Kapazität"><input type="number" min="1" className={inputCls} value={f.capacity} onChange={e=>u("capacity",e.target.value)}/></Field>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <Field label="Zimmer-Türcode"><input className={inputCls} value={f.door_code} onChange={e=>u("door_code",e.target.value)}/></Field>
+        <Field label="Nuki Code 2 (Wohnungstür)"><input className={inputCls} value={f.door_code_2} onChange={e=>u("door_code_2",e.target.value)}/></Field>
         <Field label="Haustür-Code"><input className={inputCls} value={f.house_door_code} onChange={e=>u("house_door_code",e.target.value)}/></Field>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -1307,7 +1442,7 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
       await sb.rpc("update_reservation_checkin",{p_code:booking.code,p_language:glang,p_persons:persons,p_is_used:true});
       if(dup){ setDupWarn(true); sb.from("guest_issues").insert({reservation_code:booking.code,room:room.room_number||null,category:"ID-Vorprüfung",message:"Mögliche Doppel-Ausweise beim Check-in (gleiche Bildgröße) – bitte im Admin prüfen."}).then(()=>{},()=>{}); }
       const link=(typeof window!=="undefined"?window.location.origin:"")+"/?code="+booking.code;
-      sendMail("checkin_confirmation",(people[0].email||"").trim(),glang,{guestName:people[0].name||booking.guest_name||"Gast",roomNumber:room.room_number||"",doorCode:room.door_code||"",houseDoorCode:room.house_door_code||"",reservationCode:booking.code,checkInDate:booking.check_in_date||"",checkOutDate:booking.check_out_date||"",houseAddress:[room.cleaning_objekte?.name,room.cleaning_objekte?.address].filter(Boolean).join(" · "),wifiSsid:room.wifi_ssid||"",wifiPassword:room.wifi_password||"",youtubeDoorLink:room.intro_video_url||room.youtube_door_link||"",checkoutLink:link,extensionLink:link});
+      sendMail("checkin_confirmation",(people[0].email||"").trim(),glang,{guestName:people[0].name||booking.guest_name||"Gast",roomNumber:room.room_number||"",doorCode:room.door_code + (room.door_code_2 ? " (Zimmer) · Wohnungstür-Code: " + room.door_code_2 : ""),houseDoorCode:room.house_door_code||"",reservationCode:booking.code,checkInDate:booking.check_in_date||"",checkOutDate:booking.check_out_date||"",houseAddress:[room.cleaning_objekte?.name,room.cleaning_objekte?.address].filter(Boolean).join(" · "),wifiSsid:room.wifi_ssid||"",wifiPassword:room.wifi_password||"",youtubeDoorLink:room.intro_video_url||room.youtube_door_link||"",checkoutLink:link,extensionLink:link});
       setStep(5);
     }catch(e){ err(e); }
     setBusy(false);
