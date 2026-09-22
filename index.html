@@ -1609,7 +1609,7 @@ function CompanyPortal({code}){
   const openWgb=(r)=>{ setWgbP([{name:r.guest_name||"",geburtsdatum:"",geburtsort:""}]); setWgbFor(r.code); };
   const wgbU=(i,k,v)=>setWgbP(ps=>ps.map((p,j)=>j===i?{...p,[k]:v}:p));
   const wgbSend=async()=>{ if(!wgbP.some(p=>p.name.trim()))return toast("Bitte Namen","err"); setWgbBusy(true); try{ const {error}=await sb.functions.invoke("wgb-issue",{body:{code:wgbFor,vorgang:"Einzug",personen:wgbP.filter(p=>p.name.trim())}}); if(error)throw error; sb.rpc("mz_company_request",{p_code:code,p_type:"wgb_request",p_body:"WGB beantragt ("+wgbFor+"): "+wgbP.map(p=>p.name).filter(Boolean).join(", ")}).then(()=>{},()=>{}); setWgbFor(null); toast(L("WGB beantragt – geht ans Team.","Requested – sent to team.")); }catch(e){ err(e);} setWgbBusy(false); };
-  const uploadVid=async(rcode,file)=>{ if(!file)return; setVidFor(rcode); try{ const path=rcode+"/checkout-"+Date.now()+"-"+(file.name||"video").replace(/[^\w.\-]/g,"_"); const up=await sb.storage.from("checkout-videos").upload(path,file,{upsert:true,contentType:file.type||"video/mp4"}); if(up.error)throw up.error; await sb.rpc("mz_guest_checkout_video",{p_code:rcode,p_path:path}); toast(L("Auszugsvideo hochgeladen!","Move-out video uploaded!")); }catch(e){ err(e);} setVidFor(""); };
+  const uploadVid=async(rcode,file)=>{ if(!file)return; setVidFor(rcode); try{ const path=rcode+"/checkout-"+Date.now()+"-"+(file.name||"video").replace(/[^\w.\-]/g,"_"); const up=await sb.storage.from("checkout-videos").upload(path,file,{upsert:false,contentType:file.type||"video/mp4"}); if(up.error)throw up.error; await sb.rpc("mz_guest_checkout_video",{p_code:rcode,p_path:path}); toast(L("Auszugsvideo hochgeladen!","Move-out video uploaded!")); }catch(e){ err(e);} setVidFor(""); };
   const reqRoom=(r,type)=>{ let body; if(type==="extension"){ const d=prompt(L("Verlängerung bis? (TT.MM.JJJJ)","Extend until? (DD.MM.YYYY)")); if(!d)return; body="📅 Verlängerung "+(r.haus||"")+" "+roomShort(r.room)+" (Code "+r.code+") bis "+d; } else { if(!confirm(L("Auschecken beantragen für ","Request check-out for ")+roomShort(r.room)+"?"))return; body="🧳 Auschecken "+(r.haus||"")+" "+roomShort(r.room)+" (Code "+r.code+") zum "+fmt(r.check_out_date); } sb.rpc("mz_company_request",{p_code:code,p_type:type,p_body:body}).then(()=>toast(L("Anfrage gesendet.","Request sent.")),()=>{}); };
   if(data===undefined) return <div className="min-h-screen flex items-center justify-center text-slate-400">Lädt…</div>;
   if(data===null) return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm p-4 text-center">{L("Firmen-Code nicht gefunden.","Company code not found.")}</div>;
@@ -1709,8 +1709,8 @@ function CheckinWizard({booking,room,lang,onDone,onReset}){
     try{ const sizes=people.map(p=>p.front&&p.front.size).filter(Boolean); const dup=sizes.length!==new Set(sizes).size; const stamp=Date.now();
       for(let i=0;i<people.length;i++){ const p=people[i];
         const fp=`${booking.id}/p${i+1}_front_${stamp}.jpg`, bp=`${booking.id}/p${i+1}_back_${stamp}.jpg`;
-        const u1=await sb.storage.from("id-cards").upload(fp,p.front,{upsert:true,contentType:p.front.type||"image/jpeg"}); if(u1.error)throw u1.error;
-        const u2=await sb.storage.from("id-cards").upload(bp,p.back,{upsert:true,contentType:p.back.type||"image/jpeg"}); if(u2.error)throw u2.error;
+        const u1=await sb.storage.from("id-cards").upload(fp,p.front,{upsert:false,contentType:p.front.type||"image/jpeg"}); if(u1.error)throw u1.error;
+        const u2=await sb.storage.from("id-cards").upload(bp,p.back,{upsert:false,contentType:p.back.type||"image/jpeg"}); if(u2.error)throw u2.error;
         const {error}=await sb.from("check_ins").insert({reservation_id:booking.id,full_name:p.name.trim(),email:(p.email||people[0].email||"").trim(),phone:(p.phone||people[0].phone||"").trim(),birth_date:p.birth_date||null,birth_place:p.birth_place||null,id_card_url:fp,id_card_back_url:bp,agreed_to_rules:agreeRules,agreed_to_checkout_video:agreeVideo,checked_in_at:new Date().toISOString()}); if(error)throw error;
       }
       await sb.rpc("update_reservation_checkin",{p_code:booking.code,p_language:glang,p_persons:persons,p_is_used:true});
@@ -1885,7 +1885,7 @@ function Guest({onAdmin,initialCode}) {
   const shareLink=()=>{ const u=window.location.href; if(navigator.share){navigator.share({title:"JJ Real Estate Check-in",url:u}).catch(()=>{});} else if(navigator.clipboard){navigator.clipboard.writeText(u).then(()=>toast(L("Link kopiert","Link copied")),()=>window.prompt("Link",u));} else window.prompt("Link",u); };
   const uploadCheckoutVideo=async(file)=>{ if(!file)return; setPhase("evaluating"); try{
     const path=`${booking.id}/checkout-${Date.now()}-${(file.name||"video").replace(/[^\w.\-]/g,"_")}`;
-    const up=await sb.storage.from("checkout-videos").upload(path,file,{upsert:true,contentType:file.type||"video/mp4"});
+    const up=await sb.storage.from("checkout-videos").upload(path,file,{upsert:false,contentType:file.type||"video/mp4"});
     if(up.error){ setPhase("idle"); return err(up.error); }
     await sb.rpc("mz_guest_checkout_video",{p_code:booking.code,p_path:path});
     setPhase("done"); toast(L("Video hochgeladen – danke!","Video uploaded – thank you!"));
