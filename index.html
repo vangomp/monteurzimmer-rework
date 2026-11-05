@@ -400,7 +400,8 @@ function Reservations({bump}) {
   const save=async(form)=>{ try{
     const payload={ guest_name:form.guest_name, guest_email:form.guest_email||null, room_id:form.room_id||null,
       check_in_date:form.check_in_date, check_out_date:form.check_out_date, contact_channel:form.contact_channel||null, preferred_language:form.preferred_language||"de",
-      persons:form.persons?Number(form.persons):null, status:form.status||"confirmed" };
+      persons:form.persons?Number(form.persons):null, status:form.status||"confirmed",
+      price_per_person_per_night:preisZahl(form.price_per_person_per_night) };
     if(edit==="new"){ payload.code=genCode(); const {error}=await sb.from("reservations").insert(payload); if(error) throw error; toast("Reservierung angelegt");
       if(payload.guest_email){ const rn=(roomOpts||[]).find(rr=>rr.id===payload.room_id)?.room_number||""; const link=window.location.origin+"/?code="+payload.code;
         sendMail("reservation_confirmation",payload.guest_email,payload.preferred_language||"de",{guestName:payload.guest_name||"Gast",roomNumber:rn,reservationCode:payload.code,checkInDate:payload.check_in_date||"",checkOutDate:payload.check_out_date||"",checkinLink:link}); } }
@@ -421,7 +422,8 @@ function Reservations({bump}) {
     const {error}=await sb.from("reservations").update({persons:n,updated_at:new Date().toISOString()}).eq("id",r.id); if(error)return err(error);
     const ist=ausweise(r); toast(`${r.code}: ${n} Person${n>1?"en":""}`+(ist<n?` · Gast muss ${n-ist} Ausweis${n-ist>1?"e":""} nachreichen`:"")); reload(); };
   const ausweise=(r)=>(r.check_ins||[]).filter(c=>c.id_card_url&&c.id_card_back_url).length;
-  const confirmRes=async(r)=>{ const {error}=await sb.from("reservations").update({status:"confirmed"}).eq("id",r.id); if(error)return err(error); toast("Reservierung bestätigt"); reload(); };
+  // 05.11.2026 (Jarne): Preis ist Pflicht, bevor aus einer vorlaeufigen Reservierung eine feste Buchung wird.
+  const confirmRes=async(r)=>{ if(!preisZahl(r.price_per_person_per_night)){ toast("Erst Preis pro Person/Nacht eintragen – dann fest bestätigen","err"); setEdit({...r,status:"confirmed"}); return; } const {error}=await sb.from("reservations").update({status:"confirmed"}).eq("id",r.id); if(error)return err(error); toast("Reservierung bestätigt"); reload(); };
   return (
     <div className="space-y-4">
       <PageHead title="Reservierungen" sub={`${rows.length} gesamt · live`} right={<Btn onClick={()=>setEdit("new")} size="lg">+ Neue Reservierung</Btn>}/>
@@ -466,10 +468,14 @@ function Reservations({bump}) {
     </div>
   );
 }
+// Preis-Eingabe -> Zahl > 0 oder null (Komma erlaubt). 05.11.2026.
+function preisZahl(v){ const n=Number(String(v??"").replace(",",".").trim()); return Number.isFinite(n)&&n>0?Math.round(n*100)/100:null; }
 function ResForm({rec,rooms,reservations,onSave,onClose}) {
   const [f,setF]=useState({ guest_name:rec?.guest_name||"", guest_email:rec?.guest_email||"", room_id:rec?.room_id||"",
     check_in_date:rec?.check_in_date||"", check_out_date:rec?.check_out_date||"", contact_channel:rec?.contact_channel||"", preferred_language:rec?.preferred_language||"de",
-    persons:rec?.persons??"", status:rec?.status||"confirmed" });
+    persons:rec?.persons??"", status:rec?.status||"confirmed", price_per_person_per_night:rec?.price_per_person_per_night??"" });
+  const fest=f.status!=="provisional";
+  const preisFehlt=fest&&!preisZahl(f.price_per_person_per_night);
   const u=(k,v)=>setF(s=>({...s,[k]:v}));
   const selRoom=rooms.find(r=>String(r.id)===String(f.room_id));
   const cap=selRoom?.capacity||null;
@@ -506,6 +512,10 @@ function ResForm({rec,rooms,reservations,onSave,onClose}) {
         {cap?<p className={"text-xs mt-1 font-medium "+(pers>cap?"text-rose-600":pers>=cap?"text-emerald-600":pers>0?"text-amber-600":"text-slate-400")}>{pers?(pers>cap?`⚠ ${pers} Personen – mehr als die Kapazität (${cap})`:`${pers} von ${cap} Plätzen · ${pers>=cap?"voll belegt":"teilweise belegt"}`):`Zimmer für max. ${cap} Personen`}</p>:null}
         <p className="text-[11px] text-slate-400 mt-1">Änderbar auch im laufenden Aufenthalt: Bei mehr Personen fordert die Gäste-App die fehlenden Ausweise an.</p>
       </Field>
+      <Field label={"Preis pro Person/Nacht (€ netto)"+(fest?" *":"")}>
+        <input type="number" min="0" step="0.5" inputMode="decimal" className={inputCls+(preisFehlt?" border-rose-400":"")} value={f.price_per_person_per_night} onChange={e=>u("price_per_person_per_night",e.target.value)} placeholder="z. B. 25"/>
+        <p className={"text-[11px] mt-1 "+(preisFehlt?"text-rose-600 font-medium":"text-slate-400")}>{fest?"Pflicht für eine feste Buchung.":"Bei vorläufiger Reservierung optional – Pflicht, sobald fest gebucht wird."}</p>
+      </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Kanal"><select className={inputCls} value={f.contact_channel} onChange={e=>u("contact_channel",e.target.value)}>
           <option value="">—</option><option>WhatsApp</option><option>SMS</option><option>E-Mail</option></select></Field>
@@ -519,7 +529,8 @@ function ResForm({rec,rooms,reservations,onSave,onClose}) {
       <div className="flex justify-end gap-2 mt-2"><Btn kind="soft" onClick={onClose}>Abbrechen</Btn>
         <Btn kind="ok" onClick={()=>{ if(!f.guest_name||!f.check_in_date||!f.check_out_date) return toast("Name + Zeitraum nötig","err");
           if(f.check_in_date>=f.check_out_date) return toast("Check-out muss nach Check-in liegen","err");
-          if(selUnavailable) return toast("Zimmer ist im gewählten Zeitraum belegt","err"); onSave(f); }}>Speichern</Btn></div>
+          if(selUnavailable) return toast("Zimmer ist im gewählten Zeitraum belegt","err");
+          if(preisFehlt) return toast("Preis pro Person/Nacht nötig für eine feste Buchung (nur vorläufige Reservierung geht ohne)","err"); onSave(f); }}>Speichern</Btn></div>
     </Modal>
   );
 }
